@@ -1,0 +1,25 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "noImplicitAny": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "noUnusedLocals": false,
+    "strictNullChecks": false
+  }
+}

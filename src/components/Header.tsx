@@ -47,7 +47,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>(({ onToggleSidebar, isDeskto
         </div>
 
         {/* Center section - App title */}
-        <div className="flex items-center flex-1 justify-center md:justify-start md:pl-10">
+        <div className="hidden md:flex items-center pl-10">
           <h1 className="text-xl font-bold font-heading text-foreground">
             GlazionStudio
           </h1>

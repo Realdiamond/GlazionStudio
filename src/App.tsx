@@ -1,16 +1,10 @@
 /**
- * Main App Component for GlazionStudio
+ * Main App Component for GlazionStudio - WITH AUTHENTICATION
  * 
- * This is the root component that sets up:
- * - Global providers (React Query, Tooltip, Toast)
- * - Routing configuration
- * - Error boundaries
- * - Security headers and CSP
- * 
- * Security considerations:
- * - Error boundary to prevent crashes
- * - Secure routing configuration
- * - Global error handling
+ * This version includes:
+ * - Authentication provider
+ * - Route protection (redirects to login if not authenticated)
+ * - All routes protected except login/logout
  */
 
 import React from 'react';
@@ -18,38 +12,36 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import Login from "./pages/Login";
+import Logout from "./pages/Logout";
 import AppShell from './layouts/AppShell';
 import HybridLayout from './layouts/HybridLayout';
 import RecipesToImage from './pages/RecipesToImage';
 import ImageToRecipes from './pages/ImageToRecipes';
 import UMFCalculator from './pages/UMFCalculator';
 
-// Configure React Query client with security-focused settings
+// Configure React Query client
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Prevent automatic refetching to avoid unnecessary API calls
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
-      // Cache for 5 minutes to balance performance and freshness
       staleTime: 5 * 60 * 1000,
-      // Retry failed requests up to 2 times
       retry: 2,
-      // Longer retry delay for better UX
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
     },
     mutations: {
-      // Retry mutations once on failure
       retry: 1,
     },
   },
 });
 
 /**
- * Error Boundary Component for graceful error handling
+ * Error Boundary Component
  */
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -61,16 +53,11 @@ class ErrorBoundary extends React.Component<
   }
 
   static getDerivedStateFromError(error: Error) {
-    // Update state to show error UI
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Log error for monitoring (in production, send to error tracking service)
     console.error('Application error caught by boundary:', error, errorInfo);
-    
-    // In production, you might want to send this to an error tracking service
-    // Example: Sentry.captureException(error, { extra: errorInfo });
   }
 
   render() {
@@ -100,37 +87,91 @@ class ErrorBoundary extends React.Component<
 }
 
 /**
+ * Protected Route Component - Redirects to login if not authenticated
+ */
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  // Show loading spinner while checking authentication
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="w-12 h-12 border-3 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-muted-foreground">Verifying access...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Redirect to login if not authenticated
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+/**
+ * Main App Routes Component
+ */
+const AppRoutes: React.FC = () => {
+  const { isAuthenticated } = useAuth();
+
+  return (
+    <Routes>
+      {/* Public Routes - Login/Logout */}
+      <Route 
+        path="/login" 
+        element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} 
+      />
+      <Route path="/logout" element={<Logout />} />
+      
+      {/* Protected Routes - All main app pages */}
+      <Route 
+        element={
+          <ProtectedRoute>
+            <AppShell />
+          </ProtectedRoute>
+        }
+      >
+        <Route element={<HybridLayout />}>
+          <Route path="/" element={<Index />} />
+          <Route path="/recipes-to-image" element={<RecipesToImage />} />
+          <Route path="/image-to-recipes" element={<ImageToRecipes />} />
+          <Route path="/umf-calculator" element={<UMFCalculator />} />
+        </Route>
+      </Route>
+      
+      {/* Catch-all - Redirect to login if not authenticated, otherwise 404 */}
+      <Route 
+        path="*" 
+        element={
+          isAuthenticated ? <NotFound /> : <Navigate to="/login" replace />
+        } 
+      />
+    </Routes>
+  );
+};
+
+/**
  * Main App Component
  */
 const App: React.FC = () => {
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          {/* Toast notifications for user feedback */}
-          <Toaster />
-          <Sonner />
-          
-          {/* Router configuration */}
-          <BrowserRouter>
-            <Routes>
-              {/* All pages with AppShell (sidebar + header) */}
-              <Route element={<AppShell />}>
-                {/* Main pages with tabs */}
-                <Route element={<HybridLayout />}>
-                  <Route path="/" element={<Index />} />
-                  <Route path="/recipes-to-image" element={<RecipesToImage />} />
-                  <Route path="/image-to-recipes" element={<ImageToRecipes />} />
-                  <Route path="/umf-calculator" element={<UMFCalculator />} />
-                </Route>
-              </Route>
-              
-              {/* Catch-all route for 404 handling */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </BrowserRouter>
-        </TooltipProvider>
-      </QueryClientProvider>
+      <AuthProvider>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            
+            <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+          </TooltipProvider>
+        </QueryClientProvider>
+      </AuthProvider>
     </ErrorBoundary>
   );
 };

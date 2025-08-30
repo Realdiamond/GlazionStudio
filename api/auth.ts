@@ -1,6 +1,8 @@
+// api/auth.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as jwt from 'jsonwebtoken'; // Use the 'jwt' namespace for ES module import
+import { sign, verify } from 'jsonwebtoken';
 
+// Credentials stored ONLY on server - never sent to browser
 const VALID_CREDENTIALS = [
   { email: "francisgbohunmi@gmail.com", password: "4613732518" },
   { email: "realdiamonddigital@gmail.com", password: "Password1234" },
@@ -23,26 +25,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { action, email, password, token } = req.body;
 
     if (action === 'login') {
+      // Validate credentials (server-side only)
       const isValid = VALID_CREDENTIALS.some(
-        cred => cred.email.toLowerCase() === email?.toLowerCase()?.trim() && cred.password === password
+        cred => cred.email.toLowerCase() === email?.toLowerCase()?.trim() && 
+                cred.password === password
       );
 
       if (isValid) {
-        try {
-          const authToken = jwt.sign(
-            { email: email.toLowerCase().trim(), timestamp: Date.now() },
-            JWT_SECRET,
-            { expiresIn: '1h' }
-          );
-          return res.status(200).json({
-            success: true,
-            token: authToken,
-            user: { email: email.toLowerCase().trim(), isAuthenticated: true }
-          });
-        } catch (error) {
-          console.error('Error creating JWT token:', error);
-          return res.status(500).json({ success: false, error: 'Error creating token' });
-        }
+        // Create JWT token (expires in 1 hour)
+        const authToken = sign(
+          { email: email.toLowerCase().trim(), timestamp: Date.now() },
+          JWT_SECRET,
+          { expiresIn: '1h' }
+        );
+
+        return res.status(200).json({
+          success: true,
+          token: authToken,
+          user: { email: email.toLowerCase().trim(), isAuthenticated: true }
+        });
       } else {
         return res.status(401).json({ success: false, error: 'Invalid credentials' });
       }
@@ -50,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'verify') {
       try {
-        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const decoded = verify(token, JWT_SECRET) as any;
         return res.status(200).json({
           success: true,
           user: { email: decoded.email, isAuthenticated: true }

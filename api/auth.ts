@@ -1,6 +1,6 @@
 // api/auth.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { sign, verify } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 
 // Credentials stored ONLY on server - never sent to browser
 const VALID_CREDENTIALS = [
@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (isValid) {
         // Create JWT token (expires in 1 hour)
-        const authToken = sign(
+        const authToken = jwt.sign(
           { email: email.toLowerCase().trim(), timestamp: Date.now() },
           JWT_SECRET,
           { expiresIn: '1h' }
@@ -51,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'verify') {
       try {
-        const decoded = verify(token, JWT_SECRET) as any;
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
         return res.status(200).json({
           success: true,
           user: { email: decoded.email, isAuthenticated: true }

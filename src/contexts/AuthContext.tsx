@@ -1,13 +1,6 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
-// Valid credentials - easily changeable
-const VALID_CREDENTIALS = [
-  { email: "francisgbohunmi@gmail.com", password: "4613732518" },
-  { email: "realdiamonddigital@gmail.com", password: "Password1234" },
-  { email: "tolludare@yahoo.com", password: "tolludare2."}
-];
-
 interface User {
   email: string;
   isAuthenticated: boolean;
@@ -33,27 +26,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Check for existing authentication on app start
   useEffect(() => {
-    const checkAuthStatus = () => {
+    const checkAuthStatus = async () => {
       try {
-        const authData = localStorage.getItem('glazion_auth');
-        if (authData) {
-          const { email, timestamp } = JSON.parse(authData);
-          
-          // Check if auth is still valid (optional: add expiration)
-          const now = Date.now();
-          const authAge = now - timestamp;
-          const maxAge = 60 * 60 * 1000; // an hour
-          
-          if (authAge < maxAge && email) {
-            setUser({ email, isAuthenticated: true });
+        const token = localStorage.getItem('glazion_auth_token');
+        if (token) {
+          // Verify token with server
+          const response = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'verify', token })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+              setUser(data.user);
+            } else {
+              localStorage.removeItem('glazion_auth_token');
+            }
           } else {
-            // Auth expired, clear it
-            localStorage.removeItem('glazion_auth');
+            localStorage.removeItem('glazion_auth_token');
           }
         }
       } catch (error) {
         console.error('Error checking auth status:', error);
-        localStorage.removeItem('glazion_auth');
+        localStorage.removeItem('glazion_auth_token');
       } finally {
         setIsLoading(false);
       }
@@ -66,25 +63,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(true);
     
     try {
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 800));
+      // Call server-side auth endpoint
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'login', 
+          email: email.trim(), 
+          password 
+        })
+      });
+
+      const data = await response.json();
       
-      // Check credentials
-      const isValid = VALID_CREDENTIALS.some(
-        cred => cred.email.toLowerCase() === email.toLowerCase().trim() && 
-                cred.password === password
-      );
-      
-      if (isValid) {
-        const userData = { email: email.toLowerCase().trim(), isAuthenticated: true };
-        setUser(userData);
-        
-        // Store auth data with timestamp
-        localStorage.setItem('glazion_auth', JSON.stringify({
-          email: userData.email,
-          timestamp: Date.now()
-        }));
-        
+      if (data.success) {
+        setUser(data.user);
+        // Store only the JWT token (not credentials)
+        localStorage.setItem('glazion_auth_token', data.token);
         return true;
       } else {
         return false;
@@ -99,7 +94,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('glazion_auth');
+    localStorage.removeItem('glazion_auth_token');
   };
 
   const value: AuthContextType = {

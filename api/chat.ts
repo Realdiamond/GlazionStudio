@@ -1,12 +1,15 @@
-// /api/chat.ts — Smart KB-first router with conversational short-circuit.
+// /api/chat.ts — Parallel KB + Conversation, merge + dedupe, Conversation fallback.
 // Returns ONLY { content }.
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const BASE_URL = (process.env.PRIVATE_API_BASE_URL || 'http://glazeon.somee.com').replace(/\/+$/, '');
-const KB_TIMEOUT_MS = 10_000;
-const CONV_TIMEOUT_MS = 10_000;
+/* ----------------------------- Env & Defaults ----------------------------- */
+const RAW_BASE = (process.env.PRIVATE_API_BASE_URL || 'http://18.221.95.163/').replace(/\/+$/, '');
+const KB_TIMEOUT_MS = Number(process.env.KB_TIMEOUT_MS || 10_000);
+const CONV_TIMEOUT_MS = Number(process.env.CONV_TIMEOUT_MS || 10_000);
+const CONV_CONFIDENCE_MIN = Number(process.env.CONV_CONFIDENCE_MIN || 0.6);
+const MAX_MATCH_BULLETS = Number(process.env.MAX_MATCH_BULLETS || 6);
 
-/* -------------------- Intent: short / medium / long -------------------- */
+/* --------------------------------- Modes ---------------------------------- */
 type Mode = 'short' | 'medium' | 'long';
 function inferMode(q: string): Mode {
   const s = (q || '').toLowerCase();
@@ -18,7 +21,7 @@ function inferMode(q: string): Mode {
   return 'medium';
 }
 
-/* --------------------------- Text utilities --------------------------- */
+/* ------------------------------- Sanitizers -------------------------------- */
 function stripArtifacts(t: string): string {
   if (!t) return '';
   let s = t
@@ -32,6 +35,7 @@ function stripArtifacts(t: string): string {
   if (s.startsWith('**') && s.endsWith('**')) s = s.slice(2, -2).trim();
   s = s.replace(/^\*+/, '').replace(/\*+$/, '').trim();
 
+  // Collapse repeated boilerplate lines
   s = s.replace(
     /(No relevant [^.]*? found\. Please try rephrasing your question\.)\s*\1+/gi,
     '$1'
@@ -68,115 +72,88 @@ function purgeProhibited(text: string): string {
   return s;
 }
 
+/* -------------------------- Sentence & Dedupe utils ------------------------ */
 function splitSentences(t: string): string[] {
   if (!t) return [];
-  return t.replace(/\s+/g, ' ')
+  return t
+    .replace(/\s+/g, ' ')
     .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/)
     .map(s => s.trim())
     .filter(Boolean);
 }
-function dedupeSentences(lines: string[]): string[] {
-  const seen = new Set<string>(), out: string[] = [];
-  for (const s of lines) {
-    const k = s.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(s);
-  }
-  return out;
+function normalizeForSim(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[“”‘’"()[\]{}<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
-function looksLikeNoInfo(s: string): boolean {
-  return /^no relevant .* found/i.test(s || '');
+function tokens(s: string): string[] {
+  return normalizeForSim(s).split(/[^a-z0-9]+/).filter(w => w.length > 2);
 }
-function applyThhHeadings(text: string): string {
-  return (text || '').replace(/\bThh\b\s*([^\n.]+)\.?/g, (_, h) => `\n\n### **${String(h).trim()}**\n\n`);
+function set<T>(arr: T[]) { return new Set(arr); }
+function jaccard<T>(a: Set<T>, b: Set<T>): number {
+  if (!a.size && !b.size) return 1;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter || 1);
 }
-function bulletify(list: string[]): string {
-  return list.map(s => `- ${s}`).join('\n');
+function trigrams(s: string): Set<string> {
+  const n = 3; const out: string[] = [];
+  const str = normalizeForSim(s).replace(/[^a-z0-9 ]+/g, '');
+  for (let i = 0; i <= str.length - n; i++) out.push(str.slice(i, i + n));
+  return set(out);
 }
+function potteryDensityScore(s: string): number {
+  const k = ['glaze','glazes','flux','frit','feldspar','silica','alumina','cone','crazing','fit','thermal','expansion','oxidation','reduction','bisque','vitrify','sinter','kiln','fire','soak','hold','cool','schedule','recipe'];
+  const t = tokens(s);
+  if (!t.length) return 0;
+  let hits = 0;
+  for (const w of t) if (k.includes(w)) hits++;
+  return hits / t.length;
+}
+function isStepLike(s: string): boolean {
+  return /\b(step|then|next|finally|ensure|avoid|use|mix|wedge|center|pull|trim|dry|bisque|glaze|fire|cool|inspect|measure|program|hold|soak|load|unload|apply|wash|sand)\b/i.test(s);
+}
+function dedupeByMeaning(lines: string[]): string[] {
+  const SIM_TOKENS = 0.80;
+  const SIM_TRIGRAM = 0.85;
 
-/* ----------------------- Composition (by mode) ------------------------ */
-function composeShort(answer: string): string {
-  return purgeProhibited(stripArtifacts(answer));
-}
-function composeMedium(answer: string, matches: any[]): string {
-  const base = purgeProhibited(stripArtifacts(answer));
-  const picked: string[] = [];
+  const kept: string[] = [];
+  const sigs: { tok?: Set<string>; tri?: Set<string>; score: number; raw: string }[] = [];
 
-  // sanitize matches before using
-  const cleanMatches = (matches || []).map(m => ({
-    ...m,
-    lede: purgeProhibited(stripArtifacts(String(m?.lede || ''))),
-    description: purgeProhibited(stripArtifacts(String(m?.description || '')))
-  }));
+  for (const raw of lines) {
+    const s = raw.trim();
+    if (!s) continue;
 
-  for (const m of cleanMatches) {
-    for (const field of [m?.lede, m?.description]) {
-      const ss = dedupeSentences(splitSentences(String(field || '')));
-      for (const s of ss) {
-        if (s.length < 20) continue;
-        picked.push(s);
-        if (picked.length >= 6) break;
+    const tokSet = set(tokens(s));
+    const triSet = trigrams(s);
+    const pd = potteryDensityScore(s);
+
+    let dup = false;
+    for (const prev of sigs) {
+      const jac = jaccard(tokSet, prev.tok!);
+      if (jac >= SIM_TOKENS) { dup = true; 
+        // Keep the stronger pottery sentence
+        if (pd > prev.score) { prev.raw = s; prev.tok = tokSet; prev.tri = triSet; prev.score = pd; }
+        break;
       }
-      if (picked.length >= 6) break;
+      const triSim = jaccard(triSet, prev.tri!);
+      if (triSim >= SIM_TRIGRAM) { dup = true;
+        if (pd > prev.score) { prev.raw = s; prev.tok = tokSet; prev.tri = triSet; prev.score = pd; }
+        break;
+      }
     }
-    if (picked.length >= 6) break;
-  }
-
-  if (!picked.length) return base;
-  return `${base}\n\n${bulletify(picked)}`;
-}
-function composeLong(question: string, answer: string, matches: any[]): string {
-  const procedural = /\b(how|how to|guide|tutorial|technique|techniques|steps|process|build|make|recipe|schedule|troubleshoot|fix|prevent|best practices)\b/i.test(question);
-  const base = purgeProhibited(stripArtifacts(answer));
-
-  const cleanMatches = (matches || []).map(m => ({
-    ...m,
-    title: purgeProhibited(stripArtifacts(String(m?.title || ''))),
-    lede: purgeProhibited(stripArtifacts(String(m?.lede || ''))),
-    description: purgeProhibited(stripArtifacts(String(m?.description || '')))
-  }));
-
-  const overview = base || (splitSentences(cleanMatches?.[0]?.description || '').shift() || '');
-  const stepLike: string[] = [];
-  const keyPoints: string[] = [];
-
-  const pushSentences = (text?: string) => {
-    const ss = dedupeSentences(splitSentences(String(text || '')));
-    for (const s of ss) {
-      if (s.length < 20) continue;
-      if (/\b(step|then|next|finally|ensure|avoid|use|mix|wedge|center|pull|trim|dry|bisque|glaze|fire|cool|inspect|measure|program|hold|soak|load)\b/i.test(s)) stepLike.push(s);
-      else keyPoints.push(s);
+    if (!dup) {
+      kept.push(s);
+      sigs.push({ raw: s, tok: tokSet, tri: triSet, score: pd });
     }
-  };
-
-  pushSentences(base);
-
-  const elaborations: string[] = [];
-  for (const m of cleanMatches) {
-    const title = m?.title || '';
-    if (title) elaborations.push(`**${title}**`);
-    if (m?.lede) pushSentences(m.lede);
-    if (m?.description) pushSentences(m.description);
   }
-
-  const deStep = dedupeSentences(stepLike);
-  const dePoints = dedupeSentences(keyPoints);
-  const deElabs = dedupeSentences(elaborations);
-
-  let out: string[] = [];
-  if (overview) out.push(`### **Overview**\n\n${overview}`);
-  if (procedural && deStep.length) out.push(`### **Key Steps**\n\n${bulletify(deStep)}`);
-  if (!procedural && dePoints.length) out.push(`### **Key Points**\n\n${bulletify(dePoints)}`);
-  else if (procedural && dePoints.length) out.push(`### **Notes & Parameters**\n\n${bulletify(dePoints)}`);
-  if (deElabs.length) out.push(`### **Related Topics**\n\n${bulletify(deElabs)}`);
-
-  let result = out.join('\n\n');
-  result = applyThhHeadings(result).replace(/\n{3,}/g, '\n\n').trim();
-  return result || base;
+  // Return the possibly updated 'raw' strings from sigs to reflect replacements
+  return sigs.map(x => x.raw);
 }
 
-/* ------------------------------ Fetch utils --------------------------- */
+/* --------------------------------- Fetching -------------------------------- */
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -187,55 +164,125 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-/* ---------------------------- Upstream calls -------------------------- */
-async function askKB(baseUrl: string, question: string, topK?: string | number) {
-  const qs = new URLSearchParams({ question: String(question), ...(topK ? { topK: String(topK) } : {}) }).toString();
-  const url = `${baseUrl}/api/Pottery/query?${qs}`;
-  const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, KB_TIMEOUT_MS);
-  const text = await r.text();
-  let json: any; try { json = JSON.parse(text); } catch { json = text; }
-  if (!r.ok) throw new Error((json && (json.error || json.message)) || text || 'KB upstream error');
-  return {
-    answer: typeof json === 'object' ? (json?.answer ?? '') : (typeof json === 'string' ? json : ''),
-    matches: (typeof json === 'object' && Array.isArray(json?.matches)) ? json.matches : []
-  };
-}
-async function askConversation(baseUrl: string, question: string, userId?: string) {
-  const params = new URLSearchParams({ question: String(question) });
-  if (userId) params.set('userId', String(userId));
-  const url = `${baseUrl}/api/Conversation/ask?${params.toString()}`;
-  const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, CONV_TIMEOUT_MS);
-  const text = await r.text();
-  let json: any; try { json = JSON.parse(text); } catch { json = { answer: text }; }
-  if (!r.ok) throw new Error(json?.error || text || 'Conversation upstream error');
-  return {
-    answer: purgeProhibited(stripArtifacts(json?.answer || '')),
-    confidence: typeof json?.confidence === 'number' ? json.confidence : undefined
-  };
+/* ------------------------------- Upstream calls ---------------------------- */
+type KBRes = {
+  answer: string; success?: boolean; matches?: any[]; matchCount?: number;
+};
+type ConvRes = {
+  answer: string; success?: boolean; responseType?: number; confidence?: number;
+};
+
+async function askKB(question: string, topK?: number | string): Promise<KBRes | null> {
+  const qs = new URLSearchParams({ question: String(question) });
+  if (topK !== undefined && topK !== null) qs.set('topK', String(topK));
+  const url = `${RAW_BASE}/api/Pottery/query?${qs.toString()}`;
+  try {
+    const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, KB_TIMEOUT_MS);
+    const text = await r.text();
+    const json = JSON.parse(text);
+    return {
+      answer: String(json?.answer ?? ''),
+      success: Boolean(json?.success),
+      matches: Array.isArray(json?.matches) ? json.matches : [],
+      matchCount: Number(json?.matchCount ?? 0),
+    };
+  } catch {
+    return null;
+  }
 }
 
-/* ---------------------------- Routing helpers ------------------------- */
-function isConversationalSmallTalk(msg: string): boolean {
-  const s = (msg || '').toLowerCase().trim();
-  if (s.length > 40) return false;
-  return /\b(hi|hello|hey|yo|sup|how are you|what's up|continue|explain more|talk|chat)\b/.test(s);
+async function askConversation(question: string, userId?: string): Promise<ConvRes | null> {
+  const qs = new URLSearchParams({ question: String(question) });
+  if (userId) qs.set('userId', String(userId));
+  const url = `${RAW_BASE}/api/Conversation/ask?${qs.toString()}`;
+  try {
+    const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, CONV_TIMEOUT_MS);
+    const text = await r.text();
+    const json = JSON.parse(text);
+    return {
+      answer: String(json?.answer ?? ''),
+      success: Boolean(json?.success),
+      responseType: typeof json?.responseType === 'number' ? json.responseType : undefined,
+      confidence: typeof json?.confidence === 'number' ? json.confidence : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
-function shouldGoConversationFirst(q: string): boolean {
-  const s = (q || '').toLowerCase();
-  if (/\b(why did|what went wrong|keeps|kept|won't|cannot|can['’]?t|problem|issue|crack(ed)?|warp(ed)?|pinholes?|crawling|blister(s|ing)?|not working)\b/.test(s)) return true;
-  if (/\b(what should i|which should i|recommend|suggest|choose|pick|better for me|my studio|my kiln|my clay)\b/.test(s)) return true;
-  if (/\b(set ?up|plan|budget|buy|purchase|starter kit|getting started|first time)\b/.test(s)) return true;
-  return false;
+
+/* --------------------------- Strength/weakness rules ------------------------ */
+const NOINFO_RX = /^no relevant pottery information found/i;
+function kbStrong(kb: KBRes | null): boolean {
+  if (!kb) return false;
+  const ans = purgeProhibited(stripArtifacts(kb.answer || '')).trim();
+  if (!ans || NOINFO_RX.test(ans)) return false;
+  if (kb.success === false) return false;
+  if (ans.length < 20 && (!kb.matches || kb.matches.length === 0)) return false;
+  return true;
 }
-function kbLooksWeak(answer: string, matches: any[]): boolean {
-  const a = purgeProhibited(stripArtifacts(answer || '')).trim();
-  if (!a) return true;
-  if (looksLikeNoInfo(a)) return true;
-  if (a.length < 20 && (!matches || matches.length === 0)) return true;
+function convStrong(conv: ConvRes | null): boolean {
+  if (!conv) return false;
+  const ans = purgeProhibited(stripArtifacts(conv.answer || '')).trim();
+  if (!ans) return false;
+  if (conv.success === false) return false;
+  // responseType: 1 = “proper answer” (per your sample); otherwise trust confidence
+  if (typeof conv.responseType === 'number' && conv.responseType === 1) return true;
+  if (typeof conv.confidence === 'number' && conv.confidence >= CONV_CONFIDENCE_MIN) return true;
   return false;
 }
 
-/* ------------------------------ Handler ------------------------------- */
+/* ----------------------------- Composition utils --------------------------- */
+function pickSupportBullets(matches: any[], limit: number): string[] {
+  const bullets: string[] = [];
+  for (const m of (matches || [])) {
+    const cands = [String(m?.lede || ''), String(m?.description || '')].filter(Boolean);
+    for (const c of cands) {
+      const ss = splitSentences(purgeProhibited(stripArtifacts(c)));
+      for (const s of ss) {
+        if (s.length < 20) continue;
+        bullets.push(s);
+        if (bullets.length >= limit) return bullets;
+      }
+    }
+    if (bullets.length >= limit) break;
+  }
+  return bullets;
+}
+function titlesFromMatches(matches: any[]): string[] {
+  const out: string[] = [];
+  for (const m of (matches || [])) {
+    const t = String(m?.title || '').trim();
+    if (t) out.push(`**${t}**`);
+    if (out.length >= 8) break;
+  }
+  return Array.from(new Set(out));
+}
+function composeShort(sentPool: string[]): string {
+  return sentPool.slice(0, 2).join(' ');
+}
+function composeMedium(main: string, support: string[]): string {
+  if (!support.length) return main;
+  return `${main}\n\n${support.slice(0, MAX_MATCH_BULLETS).map(s => `- ${s}`).join('\n')}`;
+}
+function composeLong(question: string, sentPool: string[], support: string[], related: string[]): string {
+  const procedural = /\b(how|how to|guide|tutorial|technique|techniques|steps|process|build|make|recipe|schedule|troubleshoot|fix|prevent|best practices)\b/i.test(question);
+  const overview = sentPool[0] || '';
+  const rest = sentPool.slice(1);
+
+  const stepLike = rest.filter(isStepLike);
+  const points = rest.filter(x => !isStepLike(x));
+
+  const sections: string[] = [];
+  if (overview) sections.push(`### **Overview**\n\n${overview}`);
+  if (procedural && stepLike.length) sections.push(`### **Key Steps**\n\n${stepLike.map(s => `- ${s}`).join('\n')}`);
+  if (points.length) sections.push(`${procedural ? '### **Notes & Parameters**' : '### **Key Points**'}\n\n${points.map(s => `- ${s}`).join('\n')}`);
+  if (support.length) sections.push(`### **Extra Details**\n\n${support.slice(0, MAX_MATCH_BULLETS).map(s => `- ${s}`).join('\n')}`);
+  if (related.length) sections.push(`### **Related Topics**\n\n${related.map(s => `- ${s}`).join('\n')}`);
+
+  return sections.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/* --------------------------------- Handler --------------------------------- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -249,66 +296,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const mode = inferMode(message);
 
-    // 0) Small-talk or strong conversational phrasing → Conversation first
-    if (isConversationalSmallTalk(message) || shouldGoConversationFirst(message)) {
-      const conv = await askConversation(BASE_URL, message, userId).catch(() => null);
-      if (conv?.answer) return res.status(200).json({ content: conv.answer });
+    // Call BOTH endpoints in parallel
+    const [kb, conv] = await Promise.all([
+      askKB(message, topK),
+      askConversation(message, userId)
+    ]);
 
-      // fallback to KB if conversation is down
-      const kb = await askKB(BASE_URL, message, topK).catch(() => null);
-      if (kb) {
-        const weak = kbLooksWeak(kb.answer, kb.matches);
-        let content = '';
-        if (!weak) {
-          if (mode === 'short') content = composeShort(kb.answer);
-          else if (mode === 'medium') content = composeMedium(kb.answer, kb.matches);
-          else content = composeLong(message, kb.answer, kb.matches);
-          return res.status(200).json({ content: applyThhHeadings(content).replace(/\n{3,}/g, '\n\n').trim() });
-        }
-      }
-      return res.status(200).json({ content: 'We couldn’t find enough on that topic. Try a related term like “cone 6 firing schedule” or “bisque firing steps”.' });
-    }
+    const kbOK = kbStrong(kb);
+    const convOK = convStrong(conv);
 
-    // 1) KB-first path
-    let kb: { answer: string; matches: any[] } | null = null;
-    try {
-      kb = await askKB(BASE_URL, message, topK);
-    } catch (e) {
-      // KB failed → Conversation once
-      const conv = await askConversation(BASE_URL, message, userId).catch(() => null);
-      if (conv?.answer) return res.status(200).json({ content: conv.answer });
-      return res.status(502).json({ error: (e as Error)?.message || 'Upstream error' });
-    }
+    // Prepare sources
+    const kbAnswer = purgeProhibited(stripArtifacts(kb?.answer || '')).trim();
+    const convAnswer = purgeProhibited(stripArtifacts(conv?.answer || '')).trim();
 
-    const baseAnswer = purgeProhibited(stripArtifacts(kb.answer || ''));
-    const matches = Array.isArray(kb.matches) ? kb.matches : [];
+    // Decision tree
+    if (kbOK && convOK) {
+      // Merge + dedupe
+      const mergedSentences = dedupeByMeaning([
+        ...splitSentences(kbAnswer),
+        ...splitSentences(convAnswer),
+      ]);
+      const support = pickSupportBullets(kb?.matches || [], MAX_MATCH_BULLETS);
+      const related = titlesFromMatches(kb?.matches || []);
 
-    // 2) Confidence gate → fallback to Conversation if weak
-    if (kbLooksWeak(baseAnswer, matches)) {
-      const conv = await askConversation(BASE_URL, message, userId).catch(() => null);
-      const convAnswer = purgeProhibited(stripArtifacts(conv?.answer || ''));
-      if (convAnswer) return res.status(200).json({ content: convAnswer });
-
-      // salvage from matches or nudge
       let content = '';
-      if (mode === 'medium' || mode === 'long') {
-        content = composeMedium('', matches)
-          || 'We couldn’t find enough on that. Try a related term like “cone 6 firing schedule”, “oxidation vs reduction”, or “bisque firing steps”.';
+      if (mode === 'short') {
+        content = composeShort(mergedSentences);
+      } else if (mode === 'medium') {
+        content = composeMedium(composeShort(mergedSentences), support);
       } else {
-        content = 'We couldn’t find enough on that topic. Try rephrasing your question.';
+        content = composeLong(message, mergedSentences, support, related);
       }
+      content = purgeProhibited(stripArtifacts(content)).replace(/\n{3,}/g, '\n\n').trim();
       return res.status(200).json({ content });
     }
 
-    // 3) Compose from KB (use sanitized fields)
-    let content = '';
-    if (mode === 'short') content = composeShort(baseAnswer);
-    else if (mode === 'medium') content = composeMedium(baseAnswer, matches);
-    else content = composeLong(message, baseAnswer, matches);
+    if (kbOK && !convOK) {
+      // Use KB only
+      const sent = splitSentences(kbAnswer);
+      const support = pickSupportBullets(kb?.matches || [], MAX_MATCH_BULLETS);
+      const related = titlesFromMatches(kb?.matches || []);
 
-    // 4) Final polish + final scrub (double safety)
-    content = purgeProhibited(applyThhHeadings(content)).replace(/\n{3,}/g, '\n\n').trim();
-    return res.status(200).json({ content });
+      let content = '';
+      if (mode === 'short') {
+        content = composeShort(sent);
+      } else if (mode === 'medium') {
+        content = composeMedium(composeShort(sent), support);
+      } else {
+        content = composeLong(message, sent, support, related);
+      }
+      content = purgeProhibited(stripArtifacts(content)).replace(/\n{3,}/g, '\n\n').trim();
+      return res.status(200).json({ content });
+    }
+
+    if (!kbOK && convOK) {
+      // Use Conversation only
+      const sent = splitSentences(convAnswer);
+      let content = '';
+      if (mode === 'short') {
+        content = composeShort(sent);
+      } else if (mode === 'medium') {
+        content = composeMedium(composeShort(sent), []);
+      } else {
+        content = composeLong(message, sent, [], []);
+      }
+      content = purgeProhibited(stripArtifacts(content)).replace(/\n{3,}/g, '\n\n').trim();
+      return res.status(200).json({ content });
+    }
+
+    // Both weak → return Conversation answer (sanitised), per your rule
+    if (convAnswer) {
+      return res.status(200).json({ content: convAnswer });
+    }
+    // Absolute last resort: a minimal nudge
+    return res.status(200).json({ content: 'We couldn’t find enough on that topic. Try a related term like “cone 6 firing schedule” or “bisque firing steps”.' });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Server error' });

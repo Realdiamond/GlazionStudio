@@ -32,7 +32,7 @@ const CIRCUIT_BREAKER_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_
 
 const GENERIC_ERROR_MESSAGE =
   String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
-  || "Sorry, I can't answer right now. Please try again in a moment.";
+  || "Something went wrong on our side. Please try again in a moment.";
 
 /* ============================== Tiny in-memory cache ============================== */
 type CacheEntry = { content: string; expiresAt: number };

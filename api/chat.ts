@@ -1,6 +1,11 @@
-// /api/chat.ts — Parallel merge (KB + Conversation), Markdown-preserving, semantic dedupe,
-// Conversation fallback, link blocklist, soft length cap, tiny cache, circuit breaker.
-// Returns ONLY { content }.
+/**
+ * Users always see a friendly message. All real errors are logged internally
+ * via console.error as **structured JSON**, visible in Vercel logs.
+ * Branch metrics (merge/kb_only/conv_only/conv_fallback) are logged with console.log.
+ *
+ * We call BOTH endpoints in parallel, merge answers,
+ * preserve Markdown, dedupe meaning, and fall back to Conversation if both are weak.
+ */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
@@ -24,6 +29,10 @@ const STRICT_LINK_BLOCKLIST = String(process.env.STRICT_LINK_BLOCKLIST || 'digit
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
 const CIRCUIT_BREAKER_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);
 const CIRCUIT_BREAKER_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || 60_000);
+
+const GENERIC_ERROR_MESSAGE =
+  String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
+  || "Sorry, I can't answer right now. Please try again in a moment.";
 
 /* ============================== Tiny in-memory cache ============================== */
 type CacheEntry = { content: string; expiresAt: number };
@@ -59,6 +68,25 @@ function breakerFail(which: 'kb' | 'conv') {
 function breakerOk(which: 'kb' | 'conv') {
   const b = cb[which];
   b.fails = 0; b.until = undefined;
+}
+
+/* ============================== Helpers: id + logging ============================== */
+
+function reqId(): string {
+  // Prefer crypto.randomUUID if available
+  try {
+    // @ts-ignore
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {}
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function logError(payload: Record<string, unknown>) {
+  // One-line structured JSON for easy search in Vercel logs
+  console.error(JSON.stringify({ level: 'error', route: '/api/chat', ...payload }));
+}
+function logInfo(payload: Record<string, unknown>) {
+  console.log(JSON.stringify({ level: 'info', route: '/api/chat', ...payload }));
 }
 
 /* ============================== Sanitizers ============================== */
@@ -396,14 +424,23 @@ function mergeMarkdownAnswers(question: string, kbAns: string, convAns: string, 
 /* ============================== Handler ============================== */
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const request_id = reqId();
+  const started_at = Date.now();
 
-    // MANDATORY base URL guard
+  try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    // Missing BASE URL → friendly to user, structured error to logs
     if (!RAW_BASE) {
-      return res.status(500).json({
-        error: 'Set PRIVATE_API_BASE_URL in Vercel (Project → Settings → Environment Variables).'
+      logError({
+        request_id,
+        branch: 'config_error',
+        base_url_set: false,
+        msg: 'Missing PRIVATE_API_BASE_URL',
       });
+      return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
     }
 
     const { message, topK, userId } = (req.body || {}) as {
@@ -411,18 +448,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       topK?: number | string;
       userId?: string;
     };
-    if (!message) return res.status(400).json({ error: 'message is required' });
+    if (!message) {
+      logError({
+        request_id,
+        branch: 'unhandled_error',
+        msg: 'No message provided',
+      });
+      return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
+    }
 
     const cacheKey = `${message}::${topK || ''}::${userId || ''}`;
     const cached = getCache(cacheKey);
     if (cached) return res.status(200).json({ content: cached });
 
-    const t0 = Date.now();
+    // Measure each call
+    const kbStart = Date.now();
+    const convStart = Date.now();
 
-    const [kb, conv] = await Promise.all([
-      askKB(message, topK),
-      askConversation(message, userId),
-    ]);
+    const kbPromise = askKB(message, topK)
+      .then(r => ({ r, ms: Date.now() - kbStart, status: r ? 'ok' : 'fail' as const }))
+      .catch(() => ({ r: null as KBRes | null, ms: Date.now() - kbStart, status: 'fail' as const }));
+
+    const convPromise = askConversation(message, userId)
+      .then(r => ({ r, ms: Date.now() - convStart, status: r ? 'ok' : 'fail' as const }))
+      .catch(() => ({ r: null as ConvRes | null, ms: Date.now() - convStart, status: 'fail' as const }));
+
+    const [{ r: kb, ms: kb_ms, status: kb_status }, { r: conv, ms: conv_ms, status: conv_status }] =
+      await Promise.all([kbPromise, convPromise]);
 
     const kbAns  = sanitizeOut(kb?.answer || '');
     const convAns = sanitizeOut(conv?.answer || '');
@@ -431,25 +483,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const convOK = convStrong(conv);
 
     let content = '';
+    let branch: 'merge'|'kb_only'|'conv_only'|'conv_fallback' = 'conv_fallback';
 
     if (kbOK && convOK) {
       content = mergeMarkdownAnswers(message, kbAns, convAns, kbOK, convOK);
-      console.log('[chat] branch=merge ok kb+conv', { kbOK, convOK, ms: Date.now() - t0 });
+      branch = 'merge';
     } else if (kbOK) {
       content = kbAns;
-      console.log('[chat] branch=kb_only', { ms: Date.now() - t0 });
+      branch = 'kb_only';
     } else if (convOK) {
       content = convAns;
-      console.log('[chat] branch=conv_only', { ms: Date.now() - t0 });
+      branch = 'conv_only';
     } else {
-      content = convAns || kbAns || 'No clear answer available right now.';
-      console.log('[chat] branch=conv_fallback', { ms: Date.now() - t0 });
+      content = convAns || kbAns || GENERIC_ERROR_MESSAGE;
+      branch = 'conv_fallback';
     }
+
+    const total_ms = Date.now() - started_at;
+    logInfo({
+      request_id,
+      branch,
+      kb_status,
+      conv_status,
+      kb_ms,
+      conv_ms,
+      latency_ms_total: total_ms,
+      conv_responseType: conv?.responseType ?? null,
+      conv_confidence: conv?.confidence ?? null,
+      message_len: message.length,
+      answer_len: content.length,
+      base_url_set: true,
+    });
 
     setCache(cacheKey, content);
     return res.status(200).json({ content });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Server error' });
+  } catch (e: any) {
+    logError({
+      request_id,
+      branch: 'unhandled_error',
+      msg: e?.message || 'Unhandled error',
+    });
+    return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
   }
 }

@@ -199,11 +199,8 @@ const Index: React.FC = () => {
             <div className="flex-1 min-h-0">
               <div
                 ref={scrollRef}
-                className="overflow-y-auto overscroll-contain scrollbar-stable"
-                style={{
-                  height: 'calc(100vh - 200px)',
-                  paddingBottom: '120px' // Space for fixed prompt
-                }}
+                className="h-full overflow-y-auto md:overflow-y-scroll overscroll-contain scrollbar-stable pr-2 md:pr-[var(--scrollbar-width)]"
+                style={{ paddingBottom: 'var(--prompt-height, 120px)' }}
               >
                 <div className="w-full max-w-3xl mx-auto">
                   <ResponseArea

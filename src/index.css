@@ -8,9 +8,8 @@
 @layer base {
   html, body, #root {
     height: 100%;
-    /* Remove overflow: hidden to allow smooth transitions */
-    overscroll-behavior-y: none;   /* prevent pull-to-refresh/chain */
-    touch-action: manipulation;    /* smoother touch */
+    overscroll-behavior-y: none;
+    touch-action: manipulation;
   }
   
   /* Apply overflow hidden only to the specific container that needs it */
@@ -35,7 +34,7 @@
     --popover-foreground: 222.2 84% 4.9%;
 
     /* Brand Colors for GlazionStudio */
-    --primary: 240 73% 59%; /* Professional blue for AI branding */
+    --primary: 240 73% 59%;
     --primary-foreground: 0 0% 100%;
     --primary-glow: 240 73% 70%;
 
@@ -101,23 +100,22 @@
     /* Typography System */
     --font-heading: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+    /* Scrollbar width for components that reserve space */
+    --scrollbar-width: 12px;
   }
 
   .dark {
-    /* Dark mode overrides would go here */
     --background: 222.2 84% 4.9%;
     --background-gradient: linear-gradient(to bottom, hsl(222.2 84% 4.9%), hsl(222.2 84% 6%));
     --foreground: 210 40% 98%;
     --card: 222.2 84% 4.9%;
     --card-foreground: 210 40% 98%;
-    /* ... other dark mode variables */
   }
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
+  * { @apply border-border; }
 
   body {
     @apply bg-background text-foreground;
@@ -126,80 +124,31 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
-  /* Custom scrollbar for better UX */
-  ::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    @apply bg-muted;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-muted-foreground/30 rounded-full;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-muted-foreground/50;
-  }
+  /* Lightweight global scrollbar: keep width, no painted track */
+  ::-webkit-scrollbar { width: 6px; }
+  body::-webkit-scrollbar-track,
+  main::-webkit-scrollbar-track { background: transparent !important; }
 }
 
 /* Custom utility classes for GlazionStudio */
 @layer utilities {
-  .gradient-primary {
-    background: var(--gradient-primary);
-  }
+  .gradient-primary { background: var(--gradient-primary); }
+  .gradient-subtle { background: var(--gradient-subtle); }
+  .gradient-card { background: var(--gradient-card); }
+  .shadow-glow { box-shadow: var(--shadow-glow); }
+  .transition-smooth { transition: var(--transition-smooth); }
+  .transition-fast { transition: var(--transition-fast); }
+  .gradient-upload { background: var(--gradient-upload); }
 
-  .gradient-subtle {
-    background: var(--gradient-subtle);
-  }
-
-  .gradient-card {
-    background: var(--gradient-card);
-  }
-
-  .shadow-glow {
-    box-shadow: var(--shadow-glow);
-  }
-
-  .transition-smooth {
-    transition: var(--transition-smooth);
-  }
-
-  .transition-fast {
-    transition: var(--transition-fast);
-  }
-
-  .gradient-upload {
-    background: var(--gradient-upload);
-  }
-
-  /* Animation keyframes */
   @keyframes fade-in {
-    0% {
-      opacity: 0;
-      transform: translateY(-10px) scale(0.95);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
+    0% { opacity: 0; transform: translateY(-10px) scale(0.95); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
   }
+  .animate-fade-in { animation: fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
 
-  .animate-fade-in {
-    animation: fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
+  .safe-area-padding-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+  .safe-area-padding-top { padding-top: max(0.75rem, env(safe-area-inset-top)); }
 
-  /* Safe area utilities for mobile devices with notches */
-  .safe-area-padding-bottom {
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
-  }
-
-  .safe-area-padding-top {
-    padding-top: max(0.75rem, env(safe-area-inset-top));
-  }
-
-  /* Line clamp utilities */
   .line-clamp-1 {
     overflow: hidden;
     display: -webkit-box;
@@ -215,55 +164,38 @@
   }
 }
 
-/* Remove duplicate base layer - already defined above */
-
-.custom-textarea::-webkit-scrollbar {
-  width: 6px; /* Thin scrollbar */
-}
-
-.custom-textarea::-webkit-scrollbar-track {
-  background: transparent; /* No background */
-}
-
+/* Textarea-specific scrollbar (kept as-is) */
+.custom-textarea::-webkit-scrollbar { width: 6px; }
+.custom-textarea::-webkit-scrollbar-track { background: transparent; }
 .custom-textarea::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.5); /* Light gray, semi-transparent */
+  background: rgba(156, 163, 175, 0.5);
   border-radius: 10px;
   transition: opacity 0.3s ease;
 }
+.custom-textarea::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
+.custom-textarea { scrollbar-width: thin; scrollbar-color: rgba(156, 163, 175, 0.5) transparent; }
 
-.custom-textarea::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 0.8); /* Darker on hover */
-}
-
-.custom-textarea {
-  scrollbar-width: thin; /* Firefox */
-  scrollbar-color: rgba(156, 163, 175, 0.5) transparent; /* Firefox */
-}
-
-/* === Custom scrollbar for chat feed === */
+/* === Stable, non-overlapping chat/side scrollbars (opt-in via class) === */
 .scrollbar-stable {
   scrollbar-gutter: stable both-edges;
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, currentColor 35%, transparent) transparent;
 }
 
-/* For WebKit browsers (Chrome, Safari, Edge) */
-.scrollbar-stable::-webkit-scrollbar {
-  width: 12px;              /* keeps reserved space */
-}
-
-.scrollbar-stable::-webkit-scrollbar-track {
-  background: transparent;  /* no white/grey bar */
-}
-
+/* WebKit (Chrome/Safari/Edge) */
+.scrollbar-stable::-webkit-scrollbar { width: var(--scrollbar-width); }
+.scrollbar-stable::-webkit-scrollbar-track { background: transparent; }
 .scrollbar-stable::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.3); /* subtle thumb */
-  border-radius: 6px;
-  border: 3px solid transparent;
+  background-color: color-mix(in oklab, currentColor 30%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent; /* keeps thumb off the content edge */
   background-clip: content-box;
 }
 
-/* Optional: dark mode adjustment */
+/* Dark tweak (optional) */
 @media (prefers-color-scheme: dark) {
   .scrollbar-stable::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.3);
+    background-color: color-mix(in oklab, white 30%, transparent);
   }
 }

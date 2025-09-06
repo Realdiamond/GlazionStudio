@@ -200,7 +200,9 @@ const Index: React.FC = () => {
               <div
                 ref={scrollRef}
                 className="h-full overflow-y-auto md:overflow-y-scroll overscroll-contain scrollbar-stable pr-2 md:pr-[var(--scrollbar-width)]"
-                style={{ paddingBottom: 'var(--prompt-height, 120px)' }}
+                style={{
+                  paddingBottom: 'var(--prompt-height, 120px)', // space for fixed PromptCard
+                }}
               >
                 <div className="w-full max-w-3xl mx-auto">
                   <ResponseArea
@@ -215,6 +217,7 @@ const Index: React.FC = () => {
                 </div>
               </div>
             </div>
+
 
             {/* Fixed PromptCard at bottom */}
             <div 

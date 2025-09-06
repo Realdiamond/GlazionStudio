@@ -199,9 +199,10 @@ const Index: React.FC = () => {
             <div className="flex-1 min-h-0">
               <div
                 ref={scrollRef}
-                className="h-full overflow-y-auto md:overflow-y-scroll overscroll-contain scrollbar-stable pr-2 md:pr-[var(--scrollbar-width)]"
+                className="overflow-y-auto md:overflow-y-scroll overscroll-contain scrollbar-stable pr-2 md:pr-[var(--scrollbar-width)]"
                 style={{
-                  paddingBottom: 'var(--prompt-height, 120px)', // space for fixed PromptCard
+                  height: 'calc(100vh - 200px)',
+                  paddingBottom: '120px', // Space for fixed prompt
                 }}
               >
                 <div className="w-full max-w-3xl mx-auto">
@@ -217,7 +218,6 @@ const Index: React.FC = () => {
                 </div>
               </div>
             </div>
-
 
             {/* Fixed PromptCard at bottom */}
             <div 

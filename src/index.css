@@ -239,3 +239,31 @@
   scrollbar-width: thin; /* Firefox */
   scrollbar-color: rgba(156, 163, 175, 0.5) transparent; /* Firefox */
 }
+
+/* === Custom scrollbar for chat feed === */
+.scrollbar-stable {
+  scrollbar-gutter: stable both-edges;
+}
+
+/* For WebKit browsers (Chrome, Safari, Edge) */
+.scrollbar-stable::-webkit-scrollbar {
+  width: 12px;              /* keeps reserved space */
+}
+
+.scrollbar-stable::-webkit-scrollbar-track {
+  background: transparent;  /* no white/grey bar */
+}
+
+.scrollbar-stable::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.3); /* subtle thumb */
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* Optional: dark mode adjustment */
+@media (prefers-color-scheme: dark) {
+  .scrollbar-stable::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.3);
+  }
+}

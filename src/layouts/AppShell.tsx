@@ -22,20 +22,20 @@ export default function AppShell() {
     const updateLayoutVars = () => {
       const desktop = window.innerWidth >= 768;
       const offset = desktop ? (isSidebarOpen ? sidebarWidth : railWidth) : 0;
-      
+
       // Set CSS custom properties on document root
       document.documentElement.style.setProperty('--sidebar-offset', `${offset}px`);
       document.documentElement.style.setProperty('--is-desktop', desktop ? '1' : '0');
       document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`);
       document.documentElement.style.setProperty('--rail-width', `${railWidth}px`);
-      
+
       // Update React state for conditional rendering
       setIsDesktop(desktop);
     };
-    
+
     // Initial update
     updateLayoutVars();
-    
+
     // Listen for resize
     window.addEventListener('resize', updateLayoutVars);
     return () => window.removeEventListener('resize', updateLayoutVars);
@@ -59,12 +59,18 @@ export default function AppShell() {
 
   const hasBottomTabs = ['/', '/recipes-to-image', '/image-to-recipes', '/umf-calculator'].includes(location.pathname);
 
+  // ✅ Chat route should NOT add page-level overflow; Index owns scroll
+  const isChat = location.pathname === '/';
+  const mainClass =
+    `transition-all duration-300 ease-in-out ${isChat ? 'overflow-hidden' : 'overflow-auto'}`;
+
   return (
-    <div className="h-[100svh] overflow-hidden bg-background text-foreground">
+    // Unify on dvh to avoid svh/dvh mismatch issues
+    <div className="h-[100dvh] overflow-hidden bg-background text-foreground">
       {/* Fixed Header - Now uses CSS variables */}
-      <Header 
-        onToggleSidebar={() => setIsSidebarOpen(prev => !prev)} 
-        isDesktop={isDesktop} 
+      <Header
+        onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
+        isDesktop={isDesktop}
       />
 
       {/* Single Sidebar that handles both expanded and collapsed states */}
@@ -72,7 +78,7 @@ export default function AppShell() {
         className="hidden md:block fixed top-0 left-0 z-40 h-screen overflow-hidden transition-[width] duration-300 ease-out"
         style={{ width: 'var(--sidebar-offset, 64px)' }}
       >
-        <Sidebar 
+        <Sidebar
           isOpen={true}
           onClose={() => setIsSidebarOpen(false)}
           isCollapsed={!isSidebarOpen}
@@ -86,13 +92,13 @@ export default function AppShell() {
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && !isDesktop && (
         <>
-          <div 
+          <div
             className="fixed inset-0 bg-black/20 z-40"
             onClick={() => setIsSidebarOpen(false)}
           />
           <div className="fixed top-0 left-0 z-50 h-screen w-64">
-            <Sidebar 
-              isOpen={true} 
+            <Sidebar
+              isOpen={true}
               onClose={() => setIsSidebarOpen(false)}
               onNewChat={handleNewChat}
               width={256}
@@ -103,15 +109,17 @@ export default function AppShell() {
 
       {/* Main Content Area - Mobile keyboard friendly */}
       <main
-        className="transition-all duration-300 ease-in-out overflow-auto"
+        className={mainClass}
         style={{
           marginLeft: 'var(--sidebar-offset, 0px)',
           paddingTop: '3.5rem',         // header is fixed, keep visual spacing
           paddingBottom: 0,             // remove extra padding
           scrollbarGutter: 'stable',
-          // ✅ FIXED: Use dynamic viewport height that adjusts for mobile keyboards
-          maxHeight: 'calc(100dvh - 3.5rem)', // dvh = dynamic viewport height
-          minHeight: 'calc(100dvh - 3.5rem)', // Adjusts when keyboard opens
+          // For chat: let Index manage scrolling; for others: AppShell manages it
+          ...(isChat
+            ? { minHeight: 'calc(100dvh - 3.5rem)' }
+            : { minHeight: 'calc(100dvh - 3.5rem)', maxHeight: 'calc(100dvh - 3.5rem)' }
+          ),
         }}
       >
         <Outlet />

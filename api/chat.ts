@@ -1,79 +1,110 @@
 /**
- * Users always see a friendly message. All real errors are logged internally
- * via console.error as **structured JSON**, visible in Vercel logs.
- * Branch metrics (merge/kb_only/conv_only/conv_fallback) are logged with console.log.
+ * Users always see a friendly message on failure (never raw errors).
+ * Real errors are logged as single-line structured JSON via console.error.
+ * Branch/metrics logs use console.log (also single-line JSON).
  *
- * We call BOTH endpoints in parallel, merge answers,
- * preserve Markdown, dedupe meaning, and fall back to Conversation if both are weak.
+ * Single upstream:
+ *    POST {PRIVATE_API_BASE_URL}/api/Query/ask
+ *
+ * Rules:
+ * - Render upstream Markdown as-is (after link blocklist sanitization).
+ * - Confidence floor for caching: >= CONV_CONFIDENCE_MIN (default 0.6).
+ * - Adaptive TopK: if confidence < 0.7 and initial TopK ≤ 8, do ONE retry with +3 (cap 12).
+ * - Cache: in-memory TTL 60s; DO NOT cache friendly error text or weak answers.
+ * - Circuit breaker: 3 consecutive failures → skip upstream for 60s.
+ * - Timeouts: 10s per upstream call.
+ * - Back-compat: returns { answer, ... } and also { content: answer }.
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 /* ============================== Env & constants ============================== */
 
-const RAW_BASE = String(process.env.PRIVATE_API_BASE_URL || '').replace(/\/+$/, ''); // MANDATORY
-const KB_TIMEOUT_MS = Number(process.env.KB_TIMEOUT_MS || 10_000);
-const CONV_TIMEOUT_MS = Number(process.env.CONV_TIMEOUT_MS || 10_000);
+const RAW_BASE = String(process.env.PRIVATE_API_BASE_URL || '').replace(/\/+$/, ''); // REQUIRED, no trailing slash
+const QUERY_TIMEOUT_MS = Number(process.env.QUERY_TIMEOUT_MS || 10_000);
 const CONV_CONFIDENCE_MIN = Number(process.env.CONV_CONFIDENCE_MIN || 0.6);
 
-const KEEP_MARKDOWN = String(process.env.KEEP_MARKDOWN || '1') === '1';
-const DEDUP_SEMANTIC = String(process.env.DEDUP_SEMANTIC || '1') === '1';
+const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
+const MAX_CACHE_ENTRIES = Number(process.env.MAX_CACHE_ENTRIES || 1000);
 
-const MAX_OUTPUT_CHARS = Number(process.env.MAX_OUTPUT_CHARS || 4000);
+const CIRCUIT_BREAKER_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);
+const CIRCUIT_BREAKER_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || 60_000);
 
 const STRICT_LINK_BLOCKLIST = String(process.env.STRICT_LINK_BLOCKLIST || 'digitalfire.com')
   .split(',')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
 
-const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
-const CIRCUIT_BREAKER_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);
-const CIRCUIT_BREAKER_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || 60_000);
-
 const GENERIC_ERROR_MESSAGE =
   String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
-  || "Something went wrong on our side. Please try again in a moment.";
+  || 'Something went wrong. Please try again.';
 
-/* ============================== Tiny in-memory cache ============================== */
-type CacheEntry = { content: string; expiresAt: number };
+/* ============================== Types (upstream) ============================== */
+type QueryRequest = {
+  query: string;
+  topK?: number;
+  includeMetadata?: boolean; // default true
+  conversationId?: string;
+};
+type QuerySource = {
+  content: string;
+  confidence: number;
+  sourceFolder: string;
+  metadata?: any;
+};
+type QueryResponse = {
+  answer: string;
+  confidence: number; // 0..1
+  conversationId?: string;
+  sources?: QuerySource[];
+  processingTimeMs?: number;
+  queryType?: string;
+};
+
+/* ============================== Tiny in-memory LRU cache ============================== */
+type CacheEntry = { value: QueryResponse; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
 
-function getCache(key: string): string | null {
+function getCache(key: string): QueryResponse | null {
   const hit = cache.get(key);
   if (!hit) return null;
   if (Date.now() > hit.expiresAt) { cache.delete(key); return null; }
-  return hit.content;
+  // refresh LRU
+  cache.delete(key);
+  cache.set(key, hit);
+  return hit.value;
 }
-function setCache(key: string, content: string, ttlSec = CACHE_TTL_SECONDS) {
+
+function setCache(key: string, value: QueryResponse, ttlSec = CACHE_TTL_SECONDS) {
   if (!ttlSec) return;
-  cache.set(key, { content, expiresAt: Date.now() + ttlSec * 1000 });
+  // simple LRU cap
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest) cache.delete(oldest);
+  }
+  cache.set(key, { value, expiresAt: Date.now() + ttlSec * 1000 });
 }
 
-/* ============================== Circuit breaker ============================== */
+/* ============================== Circuit breaker (single upstream) ============================== */
 type Breaker = { fails: number; until?: number };
-const cb: Record<'kb'|'conv', Breaker> = { kb: { fails: 0 }, conv: { fails: 0 }};
+const cb: Breaker = { fails: 0, until: undefined };
 
-function breakerOpen(which: 'kb' | 'conv'): boolean {
-  const b = cb[which];
-  return !!(b.until && Date.now() < b.until);
+function breakerOpen(): boolean {
+  return !!(cb.until && Date.now() < cb.until);
 }
-function breakerFail(which: 'kb' | 'conv') {
-  const b = cb[which];
-  b.fails += 1;
-  if (b.fails >= CIRCUIT_BREAKER_THRESHOLD) {
-    b.until = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-    b.fails = 0;
+function breakerFail() {
+  cb.fails += 1;
+  if (cb.fails >= CIRCUIT_BREAKER_THRESHOLD) {
+    cb.until = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+    cb.fails = 0;
   }
 }
-function breakerOk(which: 'kb' | 'conv') {
-  const b = cb[which];
-  b.fails = 0; b.until = undefined;
+function breakerOk() {
+  cb.fails = 0; cb.until = undefined;
 }
 
-/* ============================== Helpers: id + logging ============================== */
-
+/* ============================== Helpers: ids + logging ============================== */
 function reqId(): string {
-  // Prefer crypto.randomUUID if available
   try {
     // @ts-ignore
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -82,230 +113,36 @@ function reqId(): string {
 }
 
 function logError(payload: Record<string, unknown>) {
-  // One-line structured JSON for easy search in Vercel logs
   console.error(JSON.stringify({ level: 'error', route: '/api/chat', ...payload }));
 }
 function logInfo(payload: Record<string, unknown>) {
   console.log(JSON.stringify({ level: 'info', route: '/api/chat', ...payload }));
 }
 
-/* ============================== Sanitizers ============================== */
-
-function stripArtifacts(t: string): string {
-  if (!t) return '';
-  let s = t
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/\u00A0/g, ' ')
-    .replace(/\*{3,}/g, '**')
-    .trim();
-
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
-  if (s.startsWith('**') && s.endsWith('**')) s = s.slice(2, -2).trim();
-  s = s.replace(/^\*+/, '').replace(/\*+$/, '').trim();
-
-  s = s.replace(
-    /(No relevant [^.]*? found\. Please try rephrasing your question\.)\s*\1+/gi,
-    '$1'
-  );
-  return s;
+function normalizeMessage(s: string): string {
+  return String(s || '').trim().replace(/\s+/g, ' ');
 }
 
-function stripBlockedLinks(text: string): string {
-  if (!text) return '';
-  let s = text;
+/* ============================== Link blocklist sanitiser ============================== */
+function stripBlockedLinks(text: string): { out: string; blocked: number; domains: string[] } {
+  if (!text) return { out: '', blocked: 0, domains: [] };
+  let s = text, count = 0; const touched = new Set<string>();
+
   for (const dom of STRICT_LINK_BLOCKLIST) {
-    const rx = new RegExp(`https?:\\/\\/(?:www\\.)?${dom.replace(/\./g, '\\.')}[^\\s)\\]]*`, 'gi');
-    s = s.replace(rx, '');
-    const lineRx = new RegExp(`^.*${dom.replace(/\./g, '\\.')}.*$`, 'gim');
-    s = s.replace(lineRx, '');
+    const esc = dom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rawUrlRx = new RegExp(`https?:\\/\\/(?:www\\.)?${esc}[^\\s)\\]]*`, 'gi');
+    const mdLinkRx = new RegExp(`\\[([^\\]]+)\\]\\((https?:\\/\\/(?:www\\.)?${esc}[^\\s)\\]]*)\\)`, 'gi');
+
+    s = s.replace(rawUrlRx, () => { count++; touched.add(dom); return ''; });
+    s = s.replace(mdLinkRx, (_m, txt: string) => { count++; touched.add(dom); return txt; });
   }
-  const patterns: RegExp[] = [
-    /^\s*[-•]?\s*Buy me a coffee.*$/gim,
-    /\bBuy me a coffee\b.*$/gim,
-    /^\s*[-•]?\s*All Rights Reserved.*$/gim,
-    /\bAll Rights Reserved\b.*$/gim,
-    /^\s*[-•]?\s*Privacy Policy.*$/gim,
-    /\bPrivacy Policy\b.*$/gim,
-    /^\s*[-•]?\s*Related to:\s*.*$/gim,
-    /\bRelated to:\s*[^\n]+/gim,
-  ];
-  for (const rx of patterns) s = s.replace(rx, '');
+
+  // tidy blank list items / extra newlines
   s = s.replace(/^\s*[-•]\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
-  return s;
+  return { out: s, blocked: count, domains: Array.from(touched) };
 }
 
-function sanitizeOut(text: string): string {
-  const cleaned = stripBlockedLinks(stripArtifacts(text || ''));
-  return KEEP_MARKDOWN ? cleaned : cleaned.replace(/[#>*_`~\-]+/g, ' ');
-}
-
-/* ============================== Similarity utils ============================== */
-
-function normalizeForSim(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/`{3}[\s\S]*?`{3}/g, ' ')
-    .replace(/[`_*#>~\-+]+/g, ' ')
-    .replace(/[“”‘’"()[\]{}<>]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-function tokens(s: string): string[] {
-  return normalizeForSim(s).split(/[^a-z0-9]+/).filter(w => w.length > 2);
-}
-function set<T>(arr: T[]): Set<T> { return new Set(arr); }
-function jaccard<T>(a: Set<T>, b: Set<T>): number {
-  if (!a.size && !b.size) return 1;
-  let inter = 0;
-  for (const x of a) if (b.has(x)) inter++;
-  return inter / (a.size + b.size - inter || 1);
-}
-function trigrams(s: string): Set<string> {
-  const n = 3; const out: string[] = [];
-  const str = normalizeForSim(s);
-  for (let i = 0; i <= str.length - n; i++) out.push(str.slice(i, i + n));
-  return set(out);
-}
-function potteryDensityScore(s: string): number {
-  const k = ['glaze','glazes','flux','frit','feldspar','silica','alumina','cone','crazing','fit','thermal','expansion','oxidation','reduction','bisque','vitrify','sinter','kiln','fire','soak','hold','cool','schedule','recipe'];
-  const t = tokens(s);
-  if (!t.length) return 0;
-  let hits = 0;
-  for (const w of t) if (k.includes(w)) hits++;
-  return hits / t.length;
-}
-
-/* ============================== Markdown block split ============================== */
-
-type Block = { raw: string; kind: 'code'|'list'|'heading'|'paragraph'|'other' };
-
-function splitMarkdownBlocks(text: string): Block[] {
-  if (!text) return [];
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const out: Block[] = [];
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (/^\s*```/.test(line)) {
-      const start = i;
-      i++;
-      while (i < lines.length && !/^\s*```/.test(lines[i])) i++;
-      if (i < lines.length) i++;
-      out.push({ raw: lines.slice(start, i).join('\n'), kind: 'code' });
-      continue;
-    }
-
-    if (/^\s*#{1,6}\s+/.test(line)) {
-      out.push({ raw: line, kind: 'heading' });
-      i++;
-      continue;
-    }
-
-    if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) {
-      const start = i;
-      i++;
-      while (i < lines.length && /^\s*(?:[-*+]|\d+\.)\s+/.test(lines[i])) i++;
-      out.push({ raw: lines.slice(start, i).join('\n'), kind: 'list' });
-      continue;
-    }
-
-    if (/^\s*$/.test(line)) { i++; continue; }
-
-    const start = i;
-    i++;
-    while (
-      i < lines.length &&
-      !/^\s*$/.test(lines[i]) &&
-      !/^\s*```/.test(lines[i]) &&
-      !/^\s*#{1,6}\s+/.test(lines[i]) &&
-      !/^\s*(?:[-*+]|\d+\.)\s+/.test(lines[i])
-    ) i++;
-    out.push({ raw: lines.slice(start, i).join('\n'), kind: 'paragraph' });
-  }
-  return out;
-}
-
-/* ============================== Block-level dedupe ============================== */
-
-function similar(a: string, b: string): boolean {
-  const SIM_TOKENS = 0.8;
-  const SIM_TRIGRAM = 0.85;
-  const at = set(tokens(a)), bt = set(tokens(b));
-  if (jaccard(at, bt) >= SIM_TOKENS) return true;
-  if (jaccard(trigrams(a), trigrams(b)) >= SIM_TRIGRAM) return true;
-  return false;
-}
-
-function dedupeBlocks(primary: Block[], secondary: Block[]): Block[] {
-  if (!DEDUP_SEMANTIC) return [...primary, ...secondary];
-
-  const kept: Block[] = [];
-  const sigs: { text: string; density: number; idx: number }[] = [];
-
-  const consider = (blk: Block, preferPrimary: boolean) => {
-    const text = normalizeForSim(blk.raw);
-    if (!text) return;
-    const dens = potteryDensityScore(text);
-
-    for (let k = 0; k < sigs.length; k++) {
-      const prev = sigs[k];
-      if (similar(text, prev.text)) {
-        if (dens > prev.density || (preferPrimary && kept[prev.idx].raw !== blk.raw)) {
-          kept[prev.idx] = blk;
-          sigs[k] = { text, density: dens, idx: prev.idx };
-        }
-        return;
-      }
-    }
-    const idx = kept.push(blk) - 1;
-    sigs.push({ text, density: dens, idx });
-  };
-
-  for (const b of primary) consider(b, true);
-  for (const b of secondary) consider(b, false);
-
-  return kept;
-}
-
-/* ============================== Sentence-level tidy ============================== */
-
-function splitSentences(text: string): string[] {
-  if (!text) return [];
-  return text
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
-function dedupeSentences(paragraph: string): string {
-  if (!DEDUP_SEMANTIC) return paragraph;
-  const seen: { t: Set<string>; g: Set<string>; dens: number; raw: string }[] = [];
-
-  for (const s of splitSentences(paragraph)) {
-    const text = normalizeForSim(s);
-    const t = set(tokens(text));
-    const g = trigrams(text);
-    const dens = potteryDensityScore(text);
-
-    let dupAt = -1;
-    for (let i = 0; i < seen.length; i++) {
-      const prev = seen[i];
-      if (jaccard(t, prev.t) >= 0.8 || jaccard(g, prev.g) >= 0.85) { dupAt = i; break; }
-    }
-    if (dupAt >= 0) {
-      if (dens > seen[dupAt].dens) seen[dupAt] = { t, g, dens, raw: s };
-    } else {
-      seen.push({ t, g, dens, raw: s });
-    }
-  }
-  return seen.map(x => x.raw).join(' ');
-}
-
-/* ============================== Fetch helpers ============================== */
+/* ============================== Fetch helper with timeout ============================== */
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -316,109 +153,50 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-/* ============================== Upstream calls ============================== */
-type KBRes = { answer: string; success?: boolean };
-type ConvRes = { answer: string; success?: boolean; responseType?: number; confidence?: number };
+/* ============================== TopK heuristics ============================== */
+function determineInitialTopK(message: string, requested?: number): number {
+  if (typeof requested === 'number' && requested > 0) return Math.min(Math.max(1, requested), 12);
 
-async function askKB(question: string, topK?: number | string): Promise<KBRes | null> {
-  if (breakerOpen('kb')) return null;
-  const qs = new URLSearchParams({ question: String(question) });
-  if (topK !== undefined && topK !== null) qs.set('topK', String(topK));
-  const url = `${RAW_BASE}/api/Pottery/query?${qs.toString()}`;
+  const msg = message.toLowerCase();
+  const words = msg.split(/\s+/).filter(Boolean);
+  const isShort = words.length <= 5 && msg.length < 50;
 
+  const complexityTerms = [' and ', ' or ', ' vs ', 'compare', 'list', 'step by step', 'why', 'how to', 'fix', 'troubleshoot'];
+  const isComplex = complexityTerms.some(t => msg.includes(t)) || words.length > 15;
+
+  const comprehensiveTerms = ['all', 'everything', 'complete', 'detailed', 'step by step'];
+  const isComprehensive = comprehensiveTerms.some(t => msg.includes(t));
+
+  if (isShort) return 3;
+  if (isComprehensive) return 10;
+  if (isComplex) return 8;
+  return 5;
+}
+
+/* ============================== Upstream call ============================== */
+async function callUpstream(body: QueryRequest, timeoutMs: number):
+  Promise<{ ok: true; data: QueryResponse; ms: number } | { ok: false; error: string; status?: number; ms: number }> {
+  const started = Date.now();
   try {
-    const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, KB_TIMEOUT_MS);
-    const json = JSON.parse(await r.text());
-    const out: KBRes = { answer: String(json?.answer ?? ''), success: Boolean(json?.success) };
-    breakerOk('kb'); return out;
-  } catch { breakerFail('kb'); return null; }
-}
+    const r = await fetchWithTimeout(`${RAW_BASE}/api/Query/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, timeoutMs);
 
-async function askConversation(question: string, userId?: string): Promise<ConvRes | null> {
-  if (breakerOpen('conv')) return null;
-  const qs = new URLSearchParams({ question: String(question) });
-  if (userId) qs.set('userId', String(userId));
-  const url = `${RAW_BASE}/api/Conversation/ask?${qs.toString()}`;
-
-  try {
-    const r = await fetchWithTimeout(url, { method: 'GET', headers: { accept: 'application/json' } }, CONV_TIMEOUT_MS);
-    const json = JSON.parse(await r.text());
-    const out: ConvRes = {
-      answer: String(json?.answer ?? ''),
-      success: Boolean(json?.success),
-      responseType: typeof json?.responseType === 'number' ? json.responseType : undefined,
-      confidence: typeof json?.confidence === 'number' ? json.confidence : undefined,
-    };
-    breakerOk('conv'); return out;
-  } catch { breakerFail('conv'); return null; }
-}
-
-/* ============================== Strength rules ============================== */
-
-const NOINFO_RX = /^no relevant pottery information found/i;
-
-function kbStrong(kb: KBRes | null): boolean {
-  if (!kb) return false;
-  const ans = sanitizeOut(kb.answer);
-  if (!ans || NOINFO_RX.test(ans)) return false;
-  if (kb.success === false) return false;
-  if (ans.length < 20) return false;
-  return true;
-}
-function convStrong(conv: ConvRes | null): boolean {
-  if (!conv) return false;
-  const ans = sanitizeOut(conv.answer);
-  if (!ans) return false;
-  if (conv.success === false) return false;
-  if (typeof conv.responseType === 'number' && conv.responseType === 1) return true;
-  if (typeof conv.confidence === 'number' && conv.confidence >= CONV_CONFIDENCE_MIN) return true;
-  return false;
-}
-
-/* ============================== Merge logic ============================== */
-
-function looksProceduralQuery(q: string): boolean {
-  return /\b(how|why|steps?|fix|troubleshoot|prevent|which|should i|recommend|suggest|better|won't|cannot|keeps|not working)\b/i.test(q);
-}
-
-function choosePrimary(kbOK: boolean, convOK: boolean, question: string): 'kb'|'conv' {
-  if (kbOK && convOK) return looksProceduralQuery(question) ? 'conv' : 'kb';
-  if (convOK) return 'conv';
-  if (kbOK) return 'kb';
-  return 'conv'; // both weak → still prefer Conversation
-}
-
-function mergeMarkdownAnswers(question: string, kbAns: string, convAns: string, kbOK: boolean, convOK: boolean): string {
-  const primaryKind = choosePrimary(kbOK, convOK, question);
-  const primaryText = primaryKind === 'kb' ? kbAns : convAns;
-  const secondaryText = primaryKind === 'kb' ? convAns : kbAns;
-
-  const primBlocks = splitMarkdownBlocks(primaryText);
-  const secBlocks  = splitMarkdownBlocks(secondaryText);
-
-  const mergedBlocks = dedupeBlocks(primBlocks, secBlocks);
-
-  const tightened = mergedBlocks.map(b => {
-    if (!DEDUP_SEMANTIC) return b.raw;
-    if (b.kind !== 'paragraph') return b.raw;
-    return dedupeSentences(b.raw);
-  });
-
-  let merged = tightened.join('\n\n').trim();
-  merged = sanitizeOut(merged);
-
-  if (MAX_OUTPUT_CHARS && merged.length > MAX_OUTPUT_CHARS) {
-    const blocks = splitMarkdownBlocks(merged);
-    const kept: string[] = [];
-    let total = 0;
-    for (const b of blocks) {
-      const s = b.raw;
-      if (total + s.length + 2 > MAX_OUTPUT_CHARS) break;
-      kept.push(s); total += s.length + 2;
+    const ms = Date.now() - started;
+    if (!r.ok) {
+      let text = '';
+      try { text = await r.text(); } catch {}
+      return { ok: false, status: r.status, error: text || `HTTP ${r.status}`, ms };
     }
-    merged = kept.join('\n\n').trim();
+    const json = await r.json() as QueryResponse;
+    return { ok: true, data: json, ms };
+  } catch (e: any) {
+    const ms = Date.now() - started;
+    const msg = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fetch_error');
+    return { ok: false, error: msg, ms };
   }
-  return merged;
 }
 
 /* ============================== Handler ============================== */
@@ -432,97 +210,147 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    // Missing BASE URL → friendly to user, structured error to logs
     if (!RAW_BASE) {
-      logError({
-        request_id,
-        branch: 'config_error',
-        base_url_set: false,
-        msg: 'Missing PRIVATE_API_BASE_URL',
-      });
-      return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
+      logError({ request_id, branch: 'config_error', base_url_set: false, msg: 'Missing PRIVATE_API_BASE_URL' });
+      // Friendly message (don’t 5xx user)
+      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
     }
 
-    const { message, topK, userId } = (req.body || {}) as {
+    const { message, userId, topK, includeMetadata, conversationId } = (req.body || {}) as {
       message?: string;
-      topK?: number | string;
       userId?: string;
+      topK?: number;
+      includeMetadata?: boolean;
+      conversationId?: string;
     };
-    if (!message) {
-      logError({
-        request_id,
-        branch: 'unhandled_error',
-        msg: 'No message provided',
-      });
-      return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
+
+    if (!message || !String(message).trim()) {
+      logError({ request_id, branch: 'bad_request', msg: 'No message provided' });
+      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
     }
 
-    const cacheKey = `${message}::${topK || ''}::${userId || ''}`;
+    // Circuit breaker short-circuit
+    if (breakerOpen()) {
+      logInfo({ request_id, branch: 'cb_open_friendly', cb_until: cb.until });
+      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+    }
+
+    // Cache key (by message + resolved topK + user)
+    const normalized = normalizeMessage(message);
+    const initialTopK = determineInitialTopK(normalized, typeof topK === 'number' ? topK : undefined);
+    const cacheKey = `${normalized}::${initialTopK}::${userId || 'anon'}`;
     const cached = getCache(cacheKey);
-    if (cached) return res.status(200).json({ content: cached });
+    if (cached) {
+      const san = stripBlockedLinks(cached.answer || '');
+      logInfo({
+        request_id,
+        branch: 'cache_hit',
+        topK_initial: initialTopK,
+        confidence_final: cached.confidence,
+        blockedLinks: { count: san.blocked, domains: san.domains },
+      });
+      return res.status(200).json({ ...cached, answer: san.out, content: san.out });
+    }
 
-    // Measure each call
-    const kbStart = Date.now();
-    const convStart = Date.now();
+    // First call
+    const reqBody1: QueryRequest = {
+      query: normalized,
+      topK: initialTopK,
+      includeMetadata: includeMetadata !== false, // default true
+      conversationId,
+    };
+    const first = await callUpstream(reqBody1, QUERY_TIMEOUT_MS);
+    if (!first.ok) {
+      breakerFail();
+      logError({
+        request_id,
+        branch: 'upstream_first_error',
+        error: first.error,
+        status: first.status ?? null,
+        timings: { first_ms: first.ms },
+      });
+      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+    }
 
-    const kbPromise = askKB(message, topK)
-      .then(r => ({ r, ms: Date.now() - kbStart, status: r ? 'ok' : 'fail' as const }))
-      .catch(() => ({ r: null as KBRes | null, ms: Date.now() - kbStart, status: 'fail' as const }));
+    let chosen = first.data;
+    let topK_final = initialTopK;
+    const conf_initial = chosen.confidence ?? 0;
 
-    const convPromise = askConversation(message, userId)
-      .then(r => ({ r, ms: Date.now() - convStart, status: r ? 'ok' : 'fail' as const }))
-      .catch(() => ({ r: null as ConvRes | null, ms: Date.now() - convStart, status: 'fail' as const }));
+    // Adaptive TopK (one bump) if low confidence and we didn't start high
+    if (conf_initial < 0.7 && initialTopK <= 8) {
+      const bumped = Math.min(12, initialTopK + 3);
+      const reqBody2: QueryRequest = {
+        query: normalized,
+        topK: bumped,
+        includeMetadata: includeMetadata !== false,
+        conversationId: chosen.conversationId || conversationId,
+      };
+      const second = await callUpstream(reqBody2, QUERY_TIMEOUT_MS);
 
-    const [{ r: kb, ms: kb_ms, status: kb_status }, { r: conv, ms: conv_ms, status: conv_status }] =
-      await Promise.all([kbPromise, convPromise]);
+      if (second.ok && (second.data.confidence ?? 0) >= conf_initial) {
+        chosen = second.data;
+        topK_final = bumped;
+      }
 
-    const kbAns  = sanitizeOut(kb?.answer || '');
-    const convAns = sanitizeOut(conv?.answer || '');
-
-    const kbOK = kbStrong(kb);
-    const convOK = convStrong(conv);
-
-    let content = '';
-    let branch: 'merge'|'kb_only'|'conv_only'|'conv_fallback' = 'conv_fallback';
-
-    if (kbOK && convOK) {
-      content = mergeMarkdownAnswers(message, kbAns, convAns, kbOK, convOK);
-      branch = 'merge';
-    } else if (kbOK) {
-      content = kbAns;
-      branch = 'kb_only';
-    } else if (convOK) {
-      content = convAns;
-      branch = 'conv_only';
+      logInfo({
+        request_id,
+        branch: 'adaptive_done',
+        topK_initial: initialTopK,
+        topK_final,
+        confidence_initial: conf_initial,
+        confidence_final: chosen.confidence ?? 0,
+        timings: { first_ms: first.ms, second_ms: second.ok ? second.ms : null },
+      });
     } else {
-      content = convAns || kbAns || GENERIC_ERROR_MESSAGE;
-      branch = 'conv_fallback';
+      logInfo({
+        request_id,
+        branch: 'single_shot',
+        topK_initial: initialTopK,
+        topK_final,
+        confidence_initial: conf_initial,
+        confidence_final: chosen.confidence ?? 0,
+        timings: { first_ms: first.ms },
+      });
+    }
+
+    // Upstream success → close CB
+    breakerOk();
+
+    // Blocklist sanitization
+    const san = stripBlockedLinks(chosen.answer || '');
+    const finalAnswer = san.out;
+
+    // Cache only if above confidence floor (NEVER cache friendly error text)
+    const okToCache = (chosen.confidence ?? 0) >= CONV_CONFIDENCE_MIN;
+    if (okToCache) {
+      setCache(cacheKey, { ...chosen, answer: finalAnswer });
     }
 
     const total_ms = Date.now() - started_at;
     logInfo({
       request_id,
-      branch,
-      kb_status,
-      conv_status,
-      kb_ms,
-      conv_ms,
+      branch: okToCache ? 'success_cached' : 'success_uncached',
       latency_ms_total: total_ms,
-      conv_responseType: conv?.responseType ?? null,
-      conv_confidence: conv?.confidence ?? null,
-      message_len: message.length,
-      answer_len: content.length,
+      topK_final,
+      confidence_final: chosen.confidence ?? 0,
+      blockedLinks: { count: san.blocked, domains: san.domains },
+      message_len: normalized.length,
+      answer_len: finalAnswer.length,
       base_url_set: true,
     });
 
-    setCache(cacheKey, content);
-    return res.status(200).json({ content });
+    // Return with back-compat { content }
+    return res.status(200).json({
+      answer: finalAnswer,
+      content: finalAnswer, // backward compatibility
+      confidence: chosen.confidence ?? 0,
+      conversationId: chosen.conversationId,
+      sources: (includeMetadata !== false) ? chosen.sources : undefined,
+      processingTimeMs: chosen.processingTimeMs,
+      queryType: chosen.queryType,
+    } as QueryResponse & { content: string });
   } catch (e: any) {
-    logError({
-      request_id,
-      branch: 'unhandled_error',
-      msg: e?.message || 'Unhandled error',
-    });
-    return res.status(200).json({ content: GENERIC_ERROR_MESSAGE });
+    logError({ request_id, branch: 'unhandled_error', msg: e?.message || 'Unhandled error' });
+    return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
   }
 }

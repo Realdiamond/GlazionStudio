@@ -6,7 +6,8 @@ import jwt from 'jsonwebtoken';
 const VALID_CREDENTIALS = [
   { email: "francisgbohunmi@gmail.com", password: "4613732518" },
   { email: "realdiamonddigital@gmail.com", password: "Password1234" },
-  { email: "tolludare@yahoo.com", password: "tolludare2." }
+  { email: "tolludare@yahoo.com", password: "tolludare2." },
+  { email: "email@gmail.com", password: "email" }
 ];
 
 const JWT_SECRET = process.env.JWT_SECRET || 'glazion-demo-secret-2024';

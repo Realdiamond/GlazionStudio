@@ -70,7 +70,6 @@ const Login: React.FC = () => {
 
   const handleEditEmail = () => {
     setStep('email');
-    setEmail('');
     setPassword('');
     setLoginError('');
   };

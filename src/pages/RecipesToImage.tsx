@@ -45,7 +45,7 @@ export default function RecipesToImage() {
           <div className="grid grid-cols-1 gap-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-3 gap-4">
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Oxidation Number</span>
+                <span className="text-sm font-medium">Firing Temperature</span>
                 <input
                   type="text"
                   className="rounded-lg border bg-background p-3 w-full"
@@ -57,7 +57,7 @@ export default function RecipesToImage() {
               </label>
 
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Atmosphere</span>
+                <span className="text-sm font-medium">Firing Atmosphere</span>
                 <select
                   className="rounded-lg border bg-background p-3 w-full"
                   value={atmosphere}

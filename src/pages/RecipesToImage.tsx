@@ -134,7 +134,7 @@ export default function RecipesToImage() {
   }, [error, loading, hasPreview, resultUrl, imgLoaded]);
 
   return (
-    <div className="container mx-auto max-w-6xl p-6">
+    <div className="container mx-auto max-w-7xl p-6">
       <div className="grid gap-8 items-start md:grid-cols-[minmax(0,1fr)_540px]">
         {/* LEFT: Form column */}
         <form onSubmit={handleGenerate} className="grid gap-6 w-full">
@@ -230,8 +230,8 @@ export default function RecipesToImage() {
               className="
                 relative
                 mx-auto
-                w-[512px] h-[512px]
-                max-w-full
+                w-full max-w-[512px]
+                aspect-square
                 rounded-lg border
                 overflow-hidden
                 bg-background
@@ -239,11 +239,6 @@ export default function RecipesToImage() {
             >
               {previewContent}
             </div>
-
-            {/* Helper text (optional) */}
-            <p className="mt-2 text-xs text-muted-foreground">
-              Output is fixed at 512×512. We never upscale to avoid altering glaze texture perception.
-            </p>
           </div>
         </aside>
       </div>

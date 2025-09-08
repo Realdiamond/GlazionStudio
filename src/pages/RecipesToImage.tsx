@@ -1,5 +1,4 @@
-// src/pages/RecipesToImage.tsx
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import RecipeList, { RecipeItem } from '@/components/RecipeList';
 import { generateImageFromRecipeViaProxy, type RecipeLine } from '@/utils/api';
 
@@ -9,20 +8,25 @@ export default function RecipesToImage() {
   const [oxidation, setOxidation] = useState('');
   const [atmosphere, setAtmosphere] = useState('');
   const [notes, setNotes] = useState('');
-  const [quality, setQuality] = useState<'standard' | 'high' | ''>('');   // optional UI control
-  const [enhancePrompt, setEnhancePrompt] = useState(true);               // default true
+  const [quality, setQuality] = useState<'standard' | 'high' | ''>('');
+  const [enhancePrompt, setEnhancePrompt] = useState(true);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [imgLoaded, setImgLoaded] = useState(false);
+
+  const hasPreview = !!resultUrl;
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     setResultUrl(null);
+    setImgLoaded(false);
 
     try {
-      // Build baseRecipe (Swagger: single object)
+      // Build baseRecipe (Swagger expects a single object)
       const baseValid = base
         .map(b => ({
           material: (b.material || '').trim(),
@@ -32,7 +36,6 @@ export default function RecipesToImage() {
         .filter(b => b.material && !Number.isNaN(b.amount)) as RecipeLine[];
 
       if (baseValid.length === 0) throw new Error('Add at least one Base Recipe line with a material and amount.');
-      const baseRecipe = baseValid[0]; // take the first row by default
 
       const additivesValid = additives
         .map(a => ({
@@ -43,7 +46,7 @@ export default function RecipesToImage() {
         .filter(a => a.material && !Number.isNaN(a.amount)) as RecipeLine[];
 
       const payload = {
-        baseRecipe,
+        baseRecipe: baseValid[0],
         additives: additivesValid.length ? additivesValid : undefined,
         oxidationNumber: oxidation ? Number(oxidation) : undefined,
         atmosphere: atmosphere || undefined,
@@ -62,10 +65,78 @@ export default function RecipesToImage() {
     }
   }
 
+  // Preview state content (empty / loading / error / image)
+  const previewContent = useMemo(() => {
+    // ERROR
+    if (error) {
+      return (
+        <div className="grid h-full w-full place-items-center text-center p-4">
+          <div className="max-w-[90%]">
+            <p className="text-sm text-red-600 font-medium mb-1">Couldn’t generate image</p>
+            <p className="text-xs text-red-700/80">{error}</p>
+          </div>
+        </div>
+      );
+    }
+
+    // LOADING
+    if (loading) {
+      return (
+        <div
+          className="relative h-full w-full overflow-hidden"
+          aria-busy="true"
+          aria-live="polite"
+          aria-label="Generating glaze preview"
+        >
+          {/* Skeleton tile */}
+          <div className="absolute inset-0 animate-pulse bg-muted" />
+          {/* Center spinner + copy */}
+          <div className="absolute inset-0 grid place-items-center">
+            <div className="flex flex-col items-center gap-3">
+              {/* spinner */}
+              <svg
+                className="h-6 w-6 animate-spin"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" opacity="0.25" />
+                <path d="M22 12a10 10 0 0 1-10 10"
+                  stroke="currentColor" strokeWidth="4" fill="none" strokeLinecap="round" />
+              </svg>
+              <p className="text-xs text-muted-foreground">Generating glaze preview…</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // EMPTY
+    if (!hasPreview) {
+      return (
+        <div className="grid h-full w-full place-items-center">
+          <span className="text-sm text-muted-foreground">No preview yet</span>
+        </div>
+      );
+    }
+
+    // IMAGE (fade in when loaded)
+    return (
+      <img
+        src={resultUrl!}
+        alt="Glaze preview"
+        className={`h-full w-full object-contain transition-opacity duration-200 ${
+          imgLoaded ? 'opacity-100' : 'opacity-0'
+        }`}
+        onLoad={() => setImgLoaded(true)}
+        draggable={false}
+      />
+    );
+  }, [error, loading, hasPreview, resultUrl, imgLoaded]);
+
   return (
     <div className="container mx-auto max-w-6xl p-6">
-      <div className="grid gap-8 items-start md:grid-cols-[minmax(0,1fr)_380px]">
-        {/* Left: Form */}
+      <div className="grid gap-8 items-start md:grid-cols-[minmax(0,1fr)_540px]">
+        {/* LEFT: Form column */}
         <form onSubmit={handleGenerate} className="grid gap-6 w-full">
           <header>
             <h1 className="text-2xl font-semibold">Recipes → Image</h1>
@@ -74,7 +145,8 @@ export default function RecipesToImage() {
             </p>
           </header>
 
-          {error && (
+          {/* Inline error (non-preview) for validation or global issues */}
+          {error && !loading && !resultUrl && (
             <div className="text-sm text-red-600 border border-red-200 bg-red-50 rounded-lg p-2">{error}</div>
           )}
 
@@ -129,37 +201,49 @@ export default function RecipesToImage() {
             </label>
 
             <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={enhancePrompt}
-                onChange={() => setEnhancePrompt(v => !v)}
-              />
+              <input type="checkbox" checked={enhancePrompt} onChange={() => setEnhancePrompt(v => !v)} />
               <span className="text-sm">Enhance Prompt</span>
             </label>
           </div>
 
-          <div className="flex gap-3">
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 rounded-lg border bg-primary text-primary-foreground disabled:opacity-50"
-            >
-              {loading ? 'Generating…' : 'Generate'}
-            </button>
+          {/* Sticky action bar on desktop; inline on mobile */}
+          <div className="md:sticky md:bottom-0 md:bg-background/80 md:backdrop-blur md:border-t md:px-0 md:py-3">
+            <div className="flex gap-3 justify-start md:justify-end">
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-4 py-2 rounded-lg border bg-primary text-primary-foreground disabled:opacity-50"
+              >
+                {loading ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
           </div>
         </form>
 
-        {/* Right: Preview */}
+        {/* RIGHT: Preview column */}
         <aside className="grid gap-4">
           <div className="rounded-xl border p-3 bg-card">
             <div className="text-sm font-medium mb-2">Preview</div>
-            {resultUrl ? (
-              <img src={resultUrl} alt="Glaze preview" className="w-full rounded-lg border" />
-            ) : (
-              <div className="aspect-video grid place-items-center rounded-lg border text-sm text-muted-foreground">
-                No preview yet
-              </div>
-            )}
+
+            {/* Fixed-size 512×512 canvas; never upscale above 512 */}
+            <div
+              className="
+                relative
+                mx-auto
+                w-[512px] h-[512px]
+                max-w-full
+                rounded-lg border
+                overflow-hidden
+                bg-background
+              "
+            >
+              {previewContent}
+            </div>
+
+            {/* Helper text (optional) */}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Output is fixed at 512×512. We never upscale to avoid altering glaze texture perception.
+            </p>
           </div>
         </aside>
       </div>

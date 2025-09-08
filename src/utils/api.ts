@@ -65,12 +65,12 @@ export async function sendMessage(message: string, options: SendOptions = {}): P
     throw new Error(`Invalid JSON response (HTTP ${res.status})`);
   }
 
-  // Your backend returns confidence: 0 for friendly errors
+  // Get the response data
   const answer = (data?.answer || data?.content || '').trim();
   const confidence = typeof data?.confidence === 'number' ? data.confidence : 0;
   
-  // If confidence is 0 and answer looks like generic error, it's an error
-  if (confidence === 0 && (answer.includes('Something went wrong') || answer.includes('try again'))) {
+  // Only treat as error if it's the actual generic error message (not just confidence 0)
+  if (answer === 'Something went wrong on our side. Please try again in a moment.' || answer.includes('Something went wrong')) {
     throw new Error(answer);
   }
   

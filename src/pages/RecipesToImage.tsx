@@ -1,5 +1,7 @@
+// src/pages/RecipesToImage.tsx
 import React, { useState } from 'react';
 import RecipeList, { RecipeItem } from '@/components/RecipeList';
+import { generateImageFromRecipeViaProxy, type RecipeLine } from '@/utils/api';
 
 export default function RecipesToImage() {
   const [base, setBase] = useState<RecipeItem[]>([{ material: '', amount: '', unit: '%' }]);
@@ -7,37 +9,74 @@ export default function RecipesToImage() {
   const [oxidation, setOxidation] = useState('');
   const [atmosphere, setAtmosphere] = useState('');
   const [notes, setNotes] = useState('');
+  const [quality, setQuality] = useState<'standard' | 'high' | ''>('');   // optional UI control
+  const [enhancePrompt, setEnhancePrompt] = useState(true);               // default true
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
     setLoading(true);
+    setResultUrl(null);
+
     try {
+      // Build baseRecipe (Swagger: single object)
+      const baseValid = base
+        .map(b => ({
+          material: (b.material || '').trim(),
+          amount: Number(b.amount),
+          unit: (b.unit || '%').trim(),
+        }))
+        .filter(b => b.material && !Number.isNaN(b.amount)) as RecipeLine[];
+
+      if (baseValid.length === 0) throw new Error('Add at least one Base Recipe line with a material and amount.');
+      const baseRecipe = baseValid[0]; // take the first row by default
+
+      const additivesValid = additives
+        .map(a => ({
+          material: (a.material || '').trim(),
+          amount: Number(a.amount),
+          unit: (a.unit || '%').trim(),
+        }))
+        .filter(a => a.material && !Number.isNaN(a.amount)) as RecipeLine[];
+
       const payload = {
-        base: { items: base },
-        additives: { items: additives },
-        oxidation,
-        atmosphere,
+        baseRecipe,
+        additives: additivesValid.length ? additivesValid : undefined,
+        oxidationNumber: oxidation ? Number(oxidation) : undefined,
+        atmosphere: atmosphere || undefined,
         notes: notes || undefined,
+        enhancePrompt,
+        quality: quality || undefined,
       };
-      // TODO: POST payload to your backend
-      await new Promise(r => setTimeout(r, 900)); // mock
-      setResultUrl('https://placehold.co/800x600?text=Glaze+Preview');
+
+      const resp = await generateImageFromRecipeViaProxy(payload);
+      if (!resp.imageUrl) throw new Error('No imageUrl returned.');
+      setResultUrl(resp.imageUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to generate image.');
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-6 transition-all duration-300">
-      <div className="grid grid-cols-1 lg:grid-cols-[2fr_3fr] gap-8 items-start">
+    <div className="container mx-auto max-w-6xl p-6">
+      <div className="grid gap-8 items-start md:grid-cols-[minmax(0,1fr)_380px]">
         {/* Left: Form */}
         <form onSubmit={handleGenerate} className="grid gap-6 w-full">
           <header>
             <h1 className="text-2xl font-semibold">Recipes → Image</h1>
-            <p className="text-muted-foreground text-sm">Build your base and additives, set firing context, preview the glaze.</p>
+            <p className="text-muted-foreground text-sm">
+              Build your base and additives, set firing context, preview the glaze.
+            </p>
           </header>
+
+          {error && (
+            <div className="text-sm text-red-600 border border-red-200 bg-red-50 rounded-lg p-2">{error}</div>
+          )}
 
           <RecipeList title="Base Recipe" items={base} onChange={setBase} />
           <RecipeList title="Additives (optional)" items={additives} onChange={setAdditives} />
@@ -45,62 +84,73 @@ export default function RecipesToImage() {
           <div className="grid grid-cols-1 gap-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-3 gap-4">
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Firing Temperature</span>
+                <span className="text-sm font-medium">Firing (Oxidation #)</span>
                 <input
-                  type="text"
-                  className="rounded-lg border bg-background p-3 w-full"
-                  placeholder="e.g., 0.5, 1.0, 1.5"
+                  className="border rounded-lg px-3 py-2"
+                  placeholder="e.g., 10"
+                  inputMode="numeric"
                   value={oxidation}
-                  onChange={(e) => setOxidation(e.target.value)}
-                  required
+                  onChange={e => setOxidation(e.target.value)}
                 />
               </label>
 
               <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Firing Atmosphere</span>
-                <select
-                  className="rounded-lg border bg-background p-3 w-full"
-                  value={atmosphere}
-                  onChange={(e) => setAtmosphere(e.target.value)}
-                  required
-                >
-                  <option value="">Select...</option>
-                  <option value="oxidation">Oxidation</option>
-                  <option value="reduction">Reduction</option>
-                  <option value="neutral">Neutral</option>
-                  <option value="wood">Wood</option>
-                  <option value="soda">Soda</option>
-                  <option value="salt">Salt</option>
-                </select>
-              </label>
-
-              <label className="grid gap-2 min-w-0 sm:col-span-2 lg:col-span-1 xl:col-span-1">
-                <span className="text-sm font-medium">Notes (optional)</span>
+                <span className="text-sm font-medium">Atmosphere</span>
                 <input
-                  type="text"
-                  className="rounded-lg border bg-background p-3 w-full"
-                  placeholder="cone, cooling, thickness..."
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
+                  className="border rounded-lg px-3 py-2"
+                  placeholder="e.g., oxidation / reduction"
+                  value={atmosphere}
+                  onChange={e => setAtmosphere(e.target.value)}
                 />
               </label>
+
+              <label className="grid gap-2 min-w-0">
+                <span className="text-sm font-medium">Quality</span>
+                <select
+                  className="border rounded-lg px-3 py-2"
+                  value={quality}
+                  onChange={e => setQuality(e.target.value as any)}
+                >
+                  <option value="">Default</option>
+                  <option value="standard">Standard</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
             </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">Notes</span>
+              <textarea
+                className="border rounded-lg px-3 py-2 min-h-[90px]"
+                placeholder="Optional notes"
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+              />
+            </label>
+
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={enhancePrompt}
+                onChange={() => setEnhancePrompt(v => !v)}
+              />
+              <span className="text-sm">Enhance Prompt</span>
+            </label>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded-xl bg-primary text-primary-foreground px-4 py-2 font-medium disabled:opacity-50"
               disabled={loading}
+              className="px-4 py-2 rounded-lg border bg-primary text-primary-foreground disabled:opacity-50"
             >
-              {loading ? 'Generating…' : 'Generate Preview'}
+              {loading ? 'Generating…' : 'Generate'}
             </button>
-            <span className="text-xs text-muted-foreground">Preview opens on the right.</span>
           </div>
         </form>
 
         {/* Right: Preview */}
-        <aside className="sticky top-16 lg:max-h-[calc(100dvh-6rem)]">
+        <aside className="grid gap-4">
           <div className="rounded-xl border p-3 bg-card">
             <div className="text-sm font-medium mb-2">Preview</div>
             {resultUrl ? (

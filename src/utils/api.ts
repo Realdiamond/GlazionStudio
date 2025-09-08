@@ -57,19 +57,23 @@ export async function sendMessage(message: string, options: SendOptions = {}): P
     }),
   });
 
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const e = await res.json();
-      if (e?.error) msg = typeof e.error === 'string' ? e.error : JSON.stringify(e.error);
-    } catch {}
-    throw new Error(msg);
+  // Your backend always returns 200, even for errors! Parse JSON first
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`Invalid JSON response (HTTP ${res.status})`);
   }
 
-  const data = await res.json();
-  
-  // Use same logic as your old working version but get new fields
+  // Your backend returns confidence: 0 for friendly errors
   const answer = (data?.answer || data?.content || '').trim();
+  const confidence = typeof data?.confidence === 'number' ? data.confidence : 0;
+  
+  // If confidence is 0 and answer looks like generic error, it's an error
+  if (confidence === 0 && (answer.includes('Something went wrong') || answer.includes('try again'))) {
+    throw new Error(answer);
+  }
+  
   if (!answer) throw new Error('No response from AI');
 
   const response: QueryResponse = {

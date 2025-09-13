@@ -3,7 +3,7 @@
  * Based on Orton Pyrometric Cones chart - Regular cones, 108°F/hour (60°C/hour) heating rate
  */
 
-export type ConeNumber = '010' | '09' | '08' | '07' | '06' | '05' | '04' | '03' | '02' | '01' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12';
+export type ConeNumber = '010' | '09' | '08' | '07' | '06' | '05.5' | '05' | '04' | '03' | '02' | '01' | '1' | '2' | '3' | '4' | '5' | '5.5' | '6' | '7' | '8' | '9' | '10' | '11' | '12';
 
 export interface ConeData {
   cone: ConeNumber;
@@ -18,6 +18,7 @@ export const CONE_DATA: ConeData[] = [
   { cone: '08', fahrenheit: 1728, celsius: 942 },
   { cone: '07', fahrenheit: 1789, celsius: 976 },
   { cone: '06', fahrenheit: 1828, celsius: 998 },
+  { cone: '05.5', fahrenheit: 1877, celsius: 1025 }, // Cone 05½
   { cone: '05', fahrenheit: 1859, celsius: 1015 },
   { cone: '04', fahrenheit: 1888, celsius: 1031 },
   { cone: '03', fahrenheit: 1945, celsius: 1063 },
@@ -28,6 +29,7 @@ export const CONE_DATA: ConeData[] = [
   { cone: '3', fahrenheit: 2106, celsius: 1152 },
   { cone: '4', fahrenheit: 2124, celsius: 1162 },
   { cone: '5', fahrenheit: 2167, celsius: 1186 },
+  { cone: '5.5', fahrenheit: 2225, celsius: 1225 }, // Cone 5½
   { cone: '6', fahrenheit: 2197, celsius: 1222 },
   { cone: '7', fahrenheit: 2232, celsius: 1239 },
   { cone: '8', fahrenheit: 2262, celsius: 1249 },

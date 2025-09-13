@@ -1,14 +1,12 @@
 import React from 'react';
 
-export type RecipeItem = { material: string; amount: number | ''; unit?: string };
+export type RecipeItem = { material: string; amount: number | ''; };
 
 type Props = {
   title: string;
   items: RecipeItem[];
   onChange: (items: RecipeItem[]) => void;
 };
-
-const UNITS = ['%', 'parts', 'g'];
 
 export default function RecipeList({ title, items, onChange }: Props) {
   function update(idx: number, patch: Partial<RecipeItem>) {
@@ -17,7 +15,7 @@ export default function RecipeList({ title, items, onChange }: Props) {
   }
   
   function add() {
-    onChange([...items, { material: '', amount: '', unit: '%' }]);
+    onChange([...items, { material: '', amount: '' }]);
   }
   
   function remove(idx: number) {
@@ -62,13 +60,10 @@ export default function RecipeList({ title, items, onChange }: Props) {
               onChange={(e) => update(idx, { amount: e.target.value === '' ? '' : parseFloat(e.target.value) })}
               required
             />
-            <select
-              className="rounded-lg border bg-background p-2"
-              value={it.unit ?? '%'}
-              onChange={(e) => update(idx, { unit: e.target.value })}
-            >
-              {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
+            {/* Unit label (not interactive) */}
+            <div className="rounded-lg border bg-background p-2 flex items-center justify-center text-muted-foreground">
+              %
+            </div>
             
             {/* Conditionally show/hide Remove button while maintaining layout */}
             <button 

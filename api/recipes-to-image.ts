@@ -39,21 +39,20 @@ function recordSuccess() {
   circuitOpenedAt = null;
 }
 
-// ---- Zod schema based on your Swagger ----
+// ---- Updated Zod schema ----
 const recipeLine = z.object({
   material: z.string().min(1),
   amount: z.number(),
-  unit: z.string().optional(),
+  // Removed unit - backend knows it's percentages
 });
 
 const payloadSchema = z.object({
-  baseRecipe: recipeLine,                // Swagger shows a single object (not array)
+  baseRecipe: recipeLine,                // Single object (not array)
   additives: z.array(recipeLine).optional(),
-  oxidationNumber: z.number().int().optional(),
+  coneNumber: z.string().min(1),         // Changed from oxidationNumber
   atmosphere: z.string().optional(),
   notes: z.string().optional(),
-  enhancePrompt: z.boolean().optional(),
-  quality: z.string().optional(),        // free text per Swagger
+  // Removed: enhancePrompt, quality, unit
 });
 
 // ---- Handler ----
@@ -100,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!r.ok) {
       recordFailure();
-      // Your Swagger shows 400/503 can be plain text strings
+      // Handle error responses
       let msg = `Upstream error (${r.status})`;
       try {
         if (contentType.includes('application/json')) {

@@ -88,18 +88,16 @@ export async function sendMessage(message: string): Promise<string> {
 export type RecipeLine = {
   material: string;
   amount: number;
-  unit?: string;
 };
 
 export type RecipesToImageRequest = {
-  // NOTE: backend expects a single base object (Swagger)
+  // NOTE: backend expects a single base object
   baseRecipe: RecipeLine;
   additives?: RecipeLine[];
-  oxidationNumber?: number;
+  coneNumber: string; // Changed from oxidationNumber to coneNumber
   atmosphere?: string;
   notes?: string;
-  enhancePrompt?: boolean;
-  quality?: string; // e.g., "standard" | "high" | free text per backend
+  // Removed: unit, enhancePrompt, quality
 };
 
 export type RecipesToImageResponse = {
@@ -107,11 +105,9 @@ export type RecipesToImageResponse = {
   recipe: {
     baseRecipe: RecipeLine;
     additives?: RecipeLine[];
-    oxidationNumber?: number;
+    coneNumber: string;
     atmosphere?: string;
     notes?: string;
-    enhancePrompt?: boolean;
-    quality?: string;
   };
   imageUrl: string;
   isCloudStored: boolean;

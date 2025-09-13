@@ -1,15 +1,22 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import RecipeList, { RecipeItem } from '@/components/RecipeList';
 import { generateImageFromRecipeViaProxy, type RecipeLine } from '@/utils/api';
+import { 
+  getConeOptions, 
+  getConeData, 
+  findClosestConeByFahrenheit, 
+  findClosestConeByCelsius,
+  type ConeNumber 
+} from '@/utils/coneConversion';
 
 export default function RecipesToImage() {
-  const [base, setBase] = useState<RecipeItem[]>([{ material: '', amount: '', unit: '%' }]);
+  const [base, setBase] = useState<RecipeItem[]>([{ material: '', amount: '' }]);
   const [additives, setAdditives] = useState<RecipeItem[]>([]);
-  const [oxidation, setOxidation] = useState('');
+  const [coneNumber, setConeNumber] = useState<ConeNumber>('10');
+  const [fahrenheit, setFahrenheit] = useState(2345);
+  const [celsius, setCelsius] = useState(1285);
   const [atmosphere, setAtmosphere] = useState('');
   const [notes, setNotes] = useState('');
-  const [quality, setQuality] = useState<'standard' | 'high' | ''>('');
-  const [enhancePrompt, setEnhancePrompt] = useState(true);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,6 +24,37 @@ export default function RecipesToImage() {
   const [imgLoaded, setImgLoaded] = useState(false);
 
   const hasPreview = !!resultUrl;
+  const coneOptions = getConeOptions();
+
+  // Handle cone selection - updates F and C
+  const handleConeChange = useCallback((newCone: ConeNumber) => {
+    const coneData = getConeData(newCone);
+    if (coneData) {
+      setConeNumber(newCone);
+      setFahrenheit(coneData.fahrenheit);
+      setCelsius(coneData.celsius);
+    }
+  }, []);
+
+  // Handle Fahrenheit input - updates cone and C
+  const handleFahrenheitChange = useCallback((newF: number) => {
+    if (isNaN(newF)) return;
+    
+    const closestCone = findClosestConeByFahrenheit(newF);
+    setConeNumber(closestCone.cone);
+    setFahrenheit(newF);
+    setCelsius(Math.round((newF - 32) * 5 / 9));
+  }, []);
+
+  // Handle Celsius input - updates cone and F
+  const handleCelsiusChange = useCallback((newC: number) => {
+    if (isNaN(newC)) return;
+    
+    const closestCone = findClosestConeByCelsius(newC);
+    setConeNumber(closestCone.cone);
+    setCelsius(newC);
+    setFahrenheit(Math.round((newC * 9 / 5) + 32));
+  }, []);
 
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
@@ -26,12 +64,11 @@ export default function RecipesToImage() {
     setImgLoaded(false);
 
     try {
-      // Build baseRecipe (Swagger expects a single object)
+      // Build baseRecipe (API expects a single object)
       const baseValid = base
         .map(b => ({
           material: (b.material || '').trim(),
           amount: Number(b.amount),
-          unit: (b.unit || '%').trim(),
         }))
         .filter(b => b.material && !Number.isNaN(b.amount)) as RecipeLine[];
 
@@ -41,18 +78,15 @@ export default function RecipesToImage() {
         .map(a => ({
           material: (a.material || '').trim(),
           amount: Number(a.amount),
-          unit: (a.unit || '%').trim(),
         }))
         .filter(a => a.material && !Number.isNaN(a.amount)) as RecipeLine[];
 
       const payload = {
         baseRecipe: baseValid[0],
         additives: additivesValid.length ? additivesValid : undefined,
-        oxidationNumber: oxidation ? Number(oxidation) : undefined,
+        coneNumber: coneNumber,
         atmosphere: atmosphere || undefined,
         notes: notes || undefined,
-        enhancePrompt,
-        quality: quality || undefined,
       };
 
       const resp = await generateImageFromRecipeViaProxy(payload);
@@ -72,7 +106,7 @@ export default function RecipesToImage() {
       return (
         <div className="grid h-full w-full place-items-center text-center p-4">
           <div className="max-w-[90%]">
-            <p className="text-sm text-red-600 font-medium mb-1">Couldn’t generate image</p>
+            <p className="text-sm text-red-600 font-medium mb-1">Couldn't generate image</p>
             <p className="text-xs text-red-700/80">{error}</p>
           </div>
         </div>
@@ -154,41 +188,56 @@ export default function RecipesToImage() {
           <RecipeList title="Additives (optional)" items={additives} onChange={setAdditives} />
 
           <div className="grid grid-cols-1 gap-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-3 gap-4">
-              <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Firing (Oxidation #)</span>
-                <input
-                  className="border rounded-lg px-3 py-2"
-                  placeholder="e.g., 10"
-                  inputMode="numeric"
-                  value={oxidation}
-                  onChange={e => setOxidation(e.target.value)}
-                />
-              </label>
+            {/* Firing Temperature Section */}
+            <div className="grid gap-4">
+              <h3 className="text-sm font-medium">Firing Temperature</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <label className="grid gap-2 min-w-0">
+                  <span className="text-xs text-muted-foreground">Cone</span>
+                  <select
+                    className="border rounded-lg px-3 py-2"
+                    value={coneNumber}
+                    onChange={e => handleConeChange(e.target.value as ConeNumber)}
+                  >
+                    {coneOptions.map(cone => (
+                      <option key={cone} value={cone}>
+                        {cone}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-              <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Atmosphere</span>
-                <input
-                  className="border rounded-lg px-3 py-2"
-                  placeholder="e.g., oxidation / reduction"
-                  value={atmosphere}
-                  onChange={e => setAtmosphere(e.target.value)}
-                />
-              </label>
+                <label className="grid gap-2 min-w-0">
+                  <span className="text-xs text-muted-foreground">°F</span>
+                  <input
+                    className="border rounded-lg px-3 py-2"
+                    type="number"
+                    value={fahrenheit}
+                    onChange={e => handleFahrenheitChange(Number(e.target.value))}
+                  />
+                </label>
 
-              <label className="grid gap-2 min-w-0">
-                <span className="text-sm font-medium">Quality</span>
-                <select
-                  className="border rounded-lg px-3 py-2"
-                  value={quality}
-                  onChange={e => setQuality(e.target.value as any)}
-                >
-                  <option value="">Default</option>
-                  <option value="standard">Standard</option>
-                  <option value="high">High</option>
-                </select>
-              </label>
+                <label className="grid gap-2 min-w-0">
+                  <span className="text-xs text-muted-foreground">°C</span>
+                  <input
+                    className="border rounded-lg px-3 py-2"
+                    type="number"
+                    value={celsius}
+                    onChange={e => handleCelsiusChange(Number(e.target.value))}
+                  />
+                </label>
+              </div>
             </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium">Atmosphere</span>
+              <input
+                className="border rounded-lg px-3 py-2"
+                placeholder="e.g., oxidation / reduction"
+                value={atmosphere}
+                onChange={e => setAtmosphere(e.target.value)}
+              />
+            </label>
 
             <label className="grid gap-2">
               <span className="text-sm font-medium">Notes</span>
@@ -198,11 +247,6 @@ export default function RecipesToImage() {
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
               />
-            </label>
-
-            <label className="inline-flex items-center gap-2">
-              <input type="checkbox" checked={enhancePrompt} onChange={() => setEnhancePrompt(v => !v)} />
-              <span className="text-sm">Enhance Prompt</span>
             </label>
           </div>
 

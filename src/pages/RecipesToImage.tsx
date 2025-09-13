@@ -153,17 +153,27 @@ export default function RecipesToImage() {
       );
     }
 
-    // IMAGE (fade in when loaded)
+    // IMAGE (fade in when loaded) - COMMENTED OUT FOR TESTING
+    // return (
+    //   <img
+    //     src={resultUrl!}
+    //     alt="Glaze preview"
+    //     className={`h-full w-full object-contain transition-opacity duration-200 ${
+    //       imgLoaded ? 'opacity-100' : 'opacity-0'
+    //     }`}
+    //     onLoad={() => setImgLoaded(true)}
+    //     draggable={false}
+    //   />
+    // );
+
+    // Temporary: Show success message instead of image
     return (
-      <img
-        src={resultUrl!}
-        alt="Glaze preview"
-        className={`h-full w-full object-contain transition-opacity duration-200 ${
-          imgLoaded ? 'opacity-100' : 'opacity-0'
-        }`}
-        onLoad={() => setImgLoaded(true)}
-        draggable={false}
-      />
+      <div className="grid h-full w-full place-items-center text-center p-4">
+        <div>
+          <p className="text-sm text-green-600 font-medium mb-1">✅ Image Generated Successfully</p>
+          <p className="text-xs text-muted-foreground">Preview temporarily disabled</p>
+        </div>
+      </div>
     );
   }, [error, loading, hasPreview, resultUrl, imgLoaded]);
 

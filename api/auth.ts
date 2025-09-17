@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 const VALID_CREDENTIALS = [
   { email: "francisgbohunmi@gmail.com", password: "4613732518" },
   { email: "realdiamonddigital@gmail.com", password: "Password1234" },
-  { email: "tolludare@yahoo.com", password: "tolludare2." },
+  { email: "tolludare@yahoo.com", password: "tolludare2.f" },
   { email: "email@gmail.com", password: "email" }
 ];
 

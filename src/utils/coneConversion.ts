@@ -11,7 +11,7 @@ export interface ConeData {
   celsius: number;
 }
 
-// Temperature equivalents from Orton chart - Regular cones, 108°F/hour heating rate
+// Temperature equivalents, 108°F/hour heating rate
 export const CONE_DATA: ConeData[] = [
   { cone: '010', fahrenheit: 1657, celsius: 903 },
   { cone: '09', fahrenheit: 1688, celsius: 920 },

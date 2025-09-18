@@ -43,16 +43,15 @@ function recordSuccess() {
 const recipeLine = z.object({
   material: z.string().min(1),
   amount: z.number(),
-  // Removed unit - backend knows it's percentages
 });
 
 const payloadSchema = z.object({
-  baseRecipe: recipeLine,                // Single object (not array)
-  additives: z.array(recipeLine).optional(),
-  coneNumber: z.string().min(1),         // Changed from oxidationNumber
-  atmosphere: z.string().optional(),
+  firingTemperature: z.string().min(1),    // Changed from coneNumber
+  firingAtmosphere: z.string().optional(), // Changed from atmosphere
+  recipe: z.array(recipeLine).min(1),      // Combined base + additives
   notes: z.string().optional(),
-  // Removed: enhancePrompt, quality, unit
+  enhancePrompt: z.boolean(),              // Always true from frontend
+  quality: z.string().min(1),              // "high" | "medium" | "low"
 });
 
 // ---- Handler ----

@@ -91,23 +91,23 @@ export type RecipeLine = {
 };
 
 export type RecipesToImageRequest = {
-  // NOTE: backend expects a single base object
-  baseRecipe: RecipeLine;
-  additives?: RecipeLine[];
-  coneNumber: string; // Changed from oxidationNumber to coneNumber
-  atmosphere?: string;
+  firingTemperature: string; // Changed from coneNumber
+  firingAtmosphere?: string; // Changed from atmosphere
+  recipe: RecipeLine[]; // Combined base + additives
   notes?: string;
-  // Removed: unit, enhancePrompt, quality
+  enhancePrompt: boolean; // Always true, hidden from UI
+  quality: string; // "high" | "medium" | "low"
 };
 
 export type RecipesToImageResponse = {
   id: string;
   recipe: {
-    baseRecipe: RecipeLine;
-    additives?: RecipeLine[];
-    coneNumber: string;
-    atmosphere?: string;
+    firingTemperature: string;
+    firingAtmosphere?: string;
+    recipe: RecipeLine[];
     notes?: string;
+    enhancePrompt: boolean;
+    quality: string;
   };
   imageUrl: string;
   isCloudStored: boolean;

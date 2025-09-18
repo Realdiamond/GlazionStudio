@@ -17,6 +17,7 @@ export default function RecipesToImage() {
   const [celsius, setCelsius] = useState(1285);
   const [atmosphere, setAtmosphere] = useState('');
   const [notes, setNotes] = useState('');
+  const [quality, setQuality] = useState<'high' | 'medium' | 'low'>('medium');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,15 +65,13 @@ export default function RecipesToImage() {
     setImgLoaded(false);
 
     try {
-      // Build baseRecipe (API expects a single object)
+      // Build combined recipe array (base + additives)
       const baseValid = base
         .map(b => ({
           material: (b.material || '').trim(),
           amount: Number(b.amount),
         }))
         .filter(b => b.material && !Number.isNaN(b.amount)) as RecipeLine[];
-
-      if (baseValid.length === 0) throw new Error('Add at least one Base Recipe line with a material and amount.');
 
       const additivesValid = additives
         .map(a => ({
@@ -81,12 +80,18 @@ export default function RecipesToImage() {
         }))
         .filter(a => a.material && !Number.isNaN(a.amount)) as RecipeLine[];
 
+      // Combine base + additives into single recipe array
+      const combinedRecipe = [...baseValid, ...additivesValid];
+      
+      if (combinedRecipe.length === 0) throw new Error('Add at least one recipe line with a material and amount.');
+
       const payload = {
-        baseRecipe: baseValid[0],
-        additives: additivesValid.length ? additivesValid : undefined,
-        coneNumber: coneNumber,
-        atmosphere: atmosphere || undefined,
+        firingTemperature: coneNumber,
+        firingAtmosphere: atmosphere || undefined,
+        recipe: combinedRecipe,
         notes: notes || undefined,
+        enhancePrompt: true, // Always true, hidden from UI
+        quality: quality,
       };
 
       const resp = await generateImageFromRecipeViaProxy(payload);
@@ -153,7 +158,7 @@ export default function RecipesToImage() {
       );
     }
 
-    // IMAGE (fade in when loaded)
+    // IMAGE (fade in when loaded) - COMMENTED OUT FOR TESTING
     return (
       <img
         src={resultUrl!}
@@ -229,15 +234,30 @@ export default function RecipesToImage() {
               </div>
             </div>
 
-            <label className="grid gap-2">
-              <span className="text-sm font-medium">Atmosphere</span>
-              <input
-                className="border rounded-lg px-3 py-2"
-                placeholder="e.g., oxidation / reduction"
-                value={atmosphere}
-                onChange={e => setAtmosphere(e.target.value)}
-              />
-            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Atmosphere</span>
+                <input
+                  className="border rounded-lg px-3 py-2"
+                  placeholder="e.g., oxidation / reduction"
+                  value={atmosphere}
+                  onChange={e => setAtmosphere(e.target.value)}
+                />
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium">Quality</span>
+                <select
+                  className="border rounded-lg px-3 py-2"
+                  value={quality}
+                  onChange={e => setQuality(e.target.value as 'high' | 'medium' | 'low')}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+            </div>
 
             <label className="grid gap-2">
               <span className="text-sm font-medium">Notes</span>

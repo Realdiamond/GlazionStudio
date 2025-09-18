@@ -102,9 +102,12 @@ export type RecipesToImageRequest = {
 export type RecipesToImageResponse = {
   id: string;
   recipe: {
-    firingTemperature: string;
-    firingAtmosphere?: string;
-    recipe: RecipeLine[];
+    cone: string;                        // Backend uses "cone" not "firingTemperature"
+    materials: Array<{                   // Backend uses "materials" not "recipe"
+      material: string;
+      amount: number;
+      unit: string;                      // Backend includes unit in response
+    }>;
     notes?: string;
     enhancePrompt: boolean;
     quality: string;
@@ -112,11 +115,12 @@ export type RecipesToImageResponse = {
   imageUrl: string;
   isCloudStored: boolean;
   processingTimeMs: number;
-  status: string;                // e.g., "Success"
+  status: string;                        // e.g., "Success"
   errorMessage: string | null;
-  generatedAt: string;           // ISO datetime
+  generatedAt: string;                   // ISO datetime
   generatedPrompt?: string;
   enhancedPrompt?: string;
+  matchedRecipe?: any;                   // New field in response
 };
 
 /* =========================

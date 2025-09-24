@@ -4,7 +4,7 @@
  * Branch/metrics logs use console.log (also single-line JSON).
  *
  * Single upstream:
- *    POST {PRIVATE_API_BASE_URL}/api/Query/ask
+ *    GET {PRIVATE_API_BASE_URL}/api/Query/ask?question=...&topK=...&includeSuggestions=...&includeContext=...
  *
  * Rules:
  * - Render upstream Markdown as-is (after link blocklist sanitization).
@@ -39,19 +39,22 @@ const GENERIC_ERROR_MESSAGE =
   String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
   || 'Something went wrong. Please try again.';
 
-/* ============================== Types (upstream) ============================== */
+/* ============================== Types (internal) ============================== */
 type QueryRequest = {
   query: string;
   topK?: number;
-  includeMetadata?: boolean; // default true
-  conversationId?: string;
+  includeMetadata?: boolean; // maps to includeContext (default true)
+  conversationId?: string;   // accepted for back-compat; not sent upstream
+  userId?: string;           // forwarded upstream
 };
+
 type QuerySource = {
   content: string;
   confidence: number;
   sourceFolder: string;
   metadata?: any;
 };
+
 type QueryResponse = {
   answer: string;
   confidence: number; // 0..1
@@ -173,25 +176,77 @@ function determineInitialTopK(message: string, requested?: number): number {
   return 5;
 }
 
-/* ============================== Upstream call ============================== */
-async function callUpstream(body: QueryRequest, timeoutMs: number):
-  Promise<{ ok: true; data: QueryResponse; ms: number } | { ok: false; error: string; status?: number; ms: number }> {
+/* ============================== Upstream call (GET with query params) ============================== */
+
+type UpstreamAskParams = {
+  question: string;
+  userId?: string;
+  topK?: number;
+  includeSuggestions?: boolean; // default: true
+  includeContext?: boolean;     // maps from includeMetadata
+};
+
+// Shape returned by upstream swagger now (partial, we only map what we need)
+type UpstreamAskResponse = {
+  answer?: string;
+  query?: string;
+  success?: boolean;
+  confidence?: number;
+  responseType?: string;
+  matches?: any[];
+  sources?: QuerySource[];      // assuming compatible
+  internetSources?: any[];
+  suggestedQuestions?: string[];
+  responseTime?: string;        // ISO timestamp
+  requestId?: string;           // we map to conversationId
+  [k: string]: any;
+};
+
+async function callUpstream(
+  body: QueryRequest,
+  timeoutMs: number
+): Promise<
+  | { ok: true; data: QueryResponse; ms: number }
+  | { ok: false; error: string; status?: number; ms: number }
+> {
   const started = Date.now();
   try {
-    const r = await fetchWithTimeout(`${RAW_BASE}/api/Query/ask`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }, timeoutMs);
+    const params: UpstreamAskParams = {
+      question: body.query,
+      userId: body.userId,
+      topK: body.topK,
+      includeSuggestions: true,
+      includeContext: body.includeMetadata !== false, // default true
+    };
 
+    const usp = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      usp.set(k, typeof v === 'boolean' ? String(v) : String(v));
+    });
+
+    const url = `${RAW_BASE}/api/Query/ask?${usp.toString()}`;
+    const r = await fetchWithTimeout(url, { method: 'GET' }, timeoutMs);
     const ms = Date.now() - started;
+
     if (!r.ok) {
       let text = '';
       try { text = await r.text(); } catch {}
       return { ok: false, status: r.status, error: text || `HTTP ${r.status}`, ms };
     }
-    const json = await r.json() as QueryResponse;
-    return { ok: true, data: json, ms };
+
+    const raw = (await r.json()) as UpstreamAskResponse;
+
+    const normalized: QueryResponse = {
+      answer: raw?.answer ?? '',
+      confidence: typeof raw?.confidence === 'number' ? raw.confidence : 0,
+      conversationId: raw?.requestId,     // map new -> old name
+      sources: Array.isArray(raw?.sources) ? raw.sources : [],
+      processingTimeMs: undefined,         // upstream gives ISO responseTime; we keep undefined for now
+      queryType: raw?.responseType,
+    };
+
+    return { ok: true, data: normalized, ms };
   } catch (e: any) {
     const ms = Date.now() - started;
     const msg = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fetch_error');
@@ -257,7 +312,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       query: normalized,
       topK: initialTopK,
       includeMetadata: includeMetadata !== false, // default true
-      conversationId,
+      conversationId, // not used upstream; kept for symmetry
+      userId,
     };
     const first = await callUpstream(reqBody1, QUERY_TIMEOUT_MS);
     if (!first.ok) {
@@ -284,6 +340,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         topK: bumped,
         includeMetadata: includeMetadata !== false,
         conversationId: chosen.conversationId || conversationId,
+        userId,
       };
       const second = await callUpstream(reqBody2, QUERY_TIMEOUT_MS);
 

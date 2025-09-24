@@ -8,7 +8,9 @@ const PATH = process.env.RECIPE_IMAGE_PATH || '/api/Recipe/image';
 const GENERIC_ERROR_MESSAGE =
   process.env.GENERIC_ERROR_MESSAGE || 'Something went wrong on our side. Please try again.';
 
-const RECIPE_TIMEOUT_MS = Number(process.env.QUERY_TIMEOUT_MS || 50000);
+const RECIPE_TIMEOUT_MS =
+  Number(process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 50000);
+
 
 // Light-weight circuit breaker (same spirit as your chat route)
 const CB_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);

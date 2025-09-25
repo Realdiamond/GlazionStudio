@@ -1,64 +1,74 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
 
-// ---- Config (reads your existing envs; safe on server) ----
+/**
+ * Recipes → Image proxy
+ * - Forwards safe payload to PRIVATE_API_BASE_URL + PATH
+ * - Times out with RECIPE_TIMEOUT_MS (default 50s)
+ * - Circuit breaker counts only network errors, timeouts, and 5xx
+ * - 4xx from upstream are passed through and DO NOT trip the breaker
+ */
+
+/* ============================== Config ============================== */
+
 const BASE_URL = process.env.PRIVATE_API_BASE_URL; // required
 const PATH = process.env.RECIPE_IMAGE_PATH || '/api/Recipe/image';
 
 const GENERIC_ERROR_MESSAGE =
   process.env.GENERIC_ERROR_MESSAGE || 'Something went wrong on our side. Please try again.';
 
-const RECIPE_TIMEOUT_MS =
-  Number(process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 50000);
+// Use recipe-specific timeout, then fall back to general, then 50s default
+const RECIPE_TIMEOUT_MS = Number(
+  process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 50000
+);
 
-
-// Light-weight circuit breaker (same spirit as your chat route)
+// Circuit breaker (same spirit as chat, but smarter on 4xx)
 const CB_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);
 const CB_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || 60000);
 
 let failureCount = 0;
 let circuitOpenedAt: number | null = null;
 
-function circuitOpen() {
+function circuitOpen(): boolean {
   if (failureCount >= CB_THRESHOLD) {
     if (!circuitOpenedAt) circuitOpenedAt = Date.now();
     const since = Date.now() - circuitOpenedAt;
     if (since < CB_COOLDOWN_MS) return true;
-    // cooldown passed → reset
+    // Cooldown elapsed → reset
     failureCount = 0;
     circuitOpenedAt = null;
   }
   return false;
 }
-
 function recordFailure() {
   failureCount += 1;
   if (failureCount >= CB_THRESHOLD && !circuitOpenedAt) circuitOpenedAt = Date.now();
 }
-
 function recordSuccess() {
   failureCount = 0;
   circuitOpenedAt = null;
 }
 
-// ---- Updated Zod schema ----
+/* ============================== Validation ============================== */
+
 const recipeLine = z.object({
   material: z.string().min(1),
-  amount: z.number(),
+  amount: z.number(), // ensure UI sends a number, not a string
 });
 
 const payloadSchema = z.object({
-  firingTemperature: z.string().min(1),    // Changed from coneNumber
-  firingAtmosphere: z.string().optional(), // Changed from atmosphere
-  recipe: z.array(recipeLine).min(1),      // Combined base + additives
+  firingTemperature: z.string().min(1),
+  firingAtmosphere: z.string().optional(),
+  recipe: z.array(recipeLine).min(1),
   notes: z.string().optional(),
-  enhancePrompt: z.boolean(),              // Always true from frontend
-  quality: z.string().min(1),              // "high" | "medium" | "low"
+  enhancePrompt: z.boolean(),
+  quality: z.enum(['high', 'medium', 'low']).or(z.string().min(1)), // tolerate exact or future values
 });
 
-// ---- Handler ----
+/* ============================== Handler ============================== */
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS (mirrors your other route)
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -76,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(503).json({ error: { message: 'Service temporarily unavailable. Please try again shortly.' } });
     }
 
-    // Parse and validate payload
+    // Parse + validate
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const data = payloadSchema.parse(body);
 
@@ -99,8 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const contentType = r.headers.get('content-type') || '';
 
     if (!r.ok) {
-      recordFailure();
-      // Handle error responses
+      // Read message from upstream for debugging & user feedback
       let msg = `Upstream error (${r.status})`;
       try {
         if (contentType.includes('application/json')) {
@@ -110,8 +119,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           msg = await r.text();
         }
       } catch {
-        // ignore parse errors
+        // ignore parsing errors
       }
+
+      // Log for observability
+      console.log(JSON.stringify({
+        level: 'info',
+        route: '/api/recipes-to-image',
+        upstream_status: r.status,
+        message: msg,
+      }));
+
+      // Only count server-side failures (>=500). DO NOT count 4xx.
+      if (r.status >= 500) recordFailure(); else recordSuccess();
+
       return res.status(r.status).json({ error: { message: msg || GENERIC_ERROR_MESSAGE } });
     }
 
@@ -121,13 +142,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const json = await r.json();
       return res.status(200).json(json); // includes imageUrl and metadata
     } else {
-      // should not happen per Swagger, but safe-guard
+      // Should not happen per Swagger, but safe-guard
       const text = await r.text();
       return res.status(200).send(text);
     }
   } catch (err: any) {
     const aborted = err?.name === 'AbortError';
     const message = aborted ? 'The request took too long and was aborted.' : (err?.message || GENERIC_ERROR_MESSAGE);
-    return res.status(500).json({ error: { message } });
+
+    // Log the timeout/exception once
+    console.error(JSON.stringify({
+      level: 'error',
+      route: '/api/recipes-to-image',
+      aborted,
+      message,
+    }));
+
+    // On timeout or network/unknown errors, count as failure
+    if (aborted) recordFailure();
+
+    return res.status(aborted ? 504 : 500).json({ error: { message } });
   }
 }

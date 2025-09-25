@@ -19,7 +19,7 @@ const GENERIC_ERROR_MESSAGE =
 
 // Use recipe-specific timeout, then fall back to general, then 50s default
 const RECIPE_TIMEOUT_MS = Number(
-  process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 50000
+  process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 60000
 );
 
 // Circuit breaker (same spirit as chat, but smarter on 4xx)

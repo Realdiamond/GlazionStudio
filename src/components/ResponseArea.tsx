@@ -26,7 +26,6 @@ interface Message {
   type: 'user' | 'ai';
   content: string;
   timestamp: Date;
-  image?: string;
 }
 
 // Props for the main chat response component
@@ -213,17 +212,6 @@ const ResponseArea: React.FC<ResponseAreaProps> = (props) => {
                           : 'px-0 py-0 bg-transparent text-card-foreground'
                       }`}
                     >
-                      {/* User image upload */}
-                      {message.image && message.type === 'user' && (
-                        <div className="mb-3">
-                          <img
-                            src={message.image}
-                            alt="User uploaded"
-                            className="max-w-xs rounded-lg shadow-subtle"
-                            onError={(e) => (e.currentTarget.style.display = 'none')}
-                          />
-                        </div>
-                      )}
 
                       {/* Text or typing animation - UPDATED FOR MARKDOWN */}
                       <div className="leading-relaxed text-sm">

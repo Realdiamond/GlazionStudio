@@ -1,4 +1,19 @@
 import React from 'react';
+import {
+  Select, SelectTrigger, SelectContent, SelectGroup,
+  SelectItem, SelectLabel, SelectSeparator, SelectValue
+} from "@/components/ui/select";
+import { MATERIALS } from "@/data/materials";
+
+// helper: grouped lists
+const matsByType = {
+  frit: MATERIALS.filter(m => m.type === "frit"),
+  raw: MATERIALS.filter(m => m.type === "raw"),
+  opacifier: MATERIALS.filter(m => m.type === "opacifier"),
+  colorant: MATERIALS.filter(m => m.type === "colorant"),
+  additive: MATERIALS.filter(m => m.type === "additive"),
+};
+
 
 export type RecipeItem = { material: string; amount: number | ''; };
 
@@ -44,13 +59,52 @@ export default function RecipeList({ title, items, onChange }: Props) {
       <div className="grid gap-2">
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2">
-            <input
-              className="rounded-lg border bg-background p-2"
-              placeholder="Material (e.g., Feldspar)"
-              value={it.material}
-              onChange={(e) => update(idx, { material: e.target.value })}
-              required
-            />
+            <label className="grid gap-2">
+              <span className="text-xs text-muted-foreground">Material</span>
+
+              <Select
+                value={it.material || ""}
+                onValueChange={(value) => update(idx, { material: value })}
+              >
+                <SelectTrigger className="rounded-lg border bg-background p-2">
+                  <SelectValue placeholder="Select material" />
+                </SelectTrigger>
+
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Frits</SelectLabel>
+                    {matsByType.frit.map((m) => (
+                      // store the NAME, because your Recipes→Image payload uses material names
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                    <SelectSeparator />
+
+                    <SelectLabel>Raw Materials</SelectLabel>
+                    {matsByType.raw.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                    <SelectSeparator />
+
+                    <SelectLabel>Opacifiers</SelectLabel>
+                    {matsByType.opacifier.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                    <SelectSeparator />
+
+                    <SelectLabel>Colorants</SelectLabel>
+                    {matsByType.colorant.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                    <SelectSeparator />
+
+                    <SelectLabel>Additives</SelectLabel>
+                    {matsByType.additive.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </label>
             <input
               className="rounded-lg border bg-background p-2"
               placeholder="Amount"

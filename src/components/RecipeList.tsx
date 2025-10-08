@@ -3,16 +3,8 @@ import {
   Select, SelectTrigger, SelectContent, SelectGroup,
   SelectItem, SelectLabel, SelectSeparator, SelectValue
 } from "@/components/ui/select";
-import { MATERIALS } from "@/data/materials";
+import { MATERIAL_GROUPS as groups } from "@/data/materials";
 
-// helper: grouped lists
-const matsByType = {
-  frit: MATERIALS.filter(m => m.type === "frit"),
-  raw: MATERIALS.filter(m => m.type === "raw"),
-  opacifier: MATERIALS.filter(m => m.type === "opacifier"),
-  colorant: MATERIALS.filter(m => m.type === "colorant"),
-  additive: MATERIALS.filter(m => m.type === "additive"),
-};
 
 
 export type RecipeItem = { material: string; amount: number | ''; };
@@ -57,81 +49,77 @@ export default function RecipeList({ title, items, onChange }: Props) {
         </button>
       </div>
       <div className="grid gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2 px-1 mb-1 text-xs text-muted-foreground">
+          <div>Material</div>
+          <div>Amount</div>
+          <div>%</div>
+          <div></div>
+        </div>
+
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2">
-            <label className="grid gap-2">
-              <span className="text-xs text-muted-foreground">Material</span>
-
+            {/* Material dropdown (no repeating label) */}
+            <div className="grid gap-2">
               <Select
                 value={it.material || ""}
                 onValueChange={(value) => update(idx, { material: value })}
               >
-                <SelectTrigger className="rounded-lg border bg-background p-2">
+                <SelectTrigger className="rounded-lg border bg-background p-2" aria-label="Material">
                   <SelectValue placeholder="Select material" />
                 </SelectTrigger>
-
                 <SelectContent>
                   <SelectGroup>
                     <SelectLabel>Frits</SelectLabel>
-                    {matsByType.frit.map((m) => (
-                      // store the NAME, because your Recipes→Image payload uses material names
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
-                    ))}
+                    {groups.frit.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
                     <SelectSeparator />
-
                     <SelectLabel>Raw Materials</SelectLabel>
-                    {matsByType.raw.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
-                    ))}
+                    {groups.raw.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
                     <SelectSeparator />
-
                     <SelectLabel>Opacifiers</SelectLabel>
-                    {matsByType.opacifier.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
-                    ))}
+                    {groups.opacifier.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
                     <SelectSeparator />
-
                     <SelectLabel>Colorants</SelectLabel>
-                    {matsByType.colorant.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
-                    ))}
+                    {groups.colorant.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
                     <SelectSeparator />
-
                     <SelectLabel>Additives</SelectLabel>
-                    {matsByType.additive.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
-                    ))}
+                    {groups.additive.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
                   </SelectGroup>
                 </SelectContent>
               </Select>
-            </label>
+            </div>
+
+            {/* Amount */}
             <input
               className="rounded-lg border bg-background p-2"
               placeholder="Amount"
-              type="number"
-              step="0.01"
-              value={it.amount}
-              onChange={(e) => update(idx, { amount: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+              inputMode="decimal"
+              type="text"             // or keep type="number" if you prefer
+              value={it.amount === '' ? '' : String(it.amount)}
+              onChange={(e) =>
+                update(idx, {
+                  amount: e.target.value.trim() === '' ? '' : Number(e.target.value)
+                })
+              }
               required
             />
-            {/* Unit label (not interactive) */}
+
+            {/* % display */}
             <div className="rounded-lg border bg-background p-2 flex items-center justify-center text-muted-foreground">
               %
             </div>
-            
-            {/* Conditionally show/hide Remove button while maintaining layout */}
-            <button 
-              type="button" 
-              onClick={() => remove(idx)} 
-              className={`px-3 py-2 rounded-lg border hover:bg-muted ${
-                shouldShowRemove(idx) ? '' : 'invisible'
-              }`}
+
+            {/* Remove button (your logic) */}
+            <button
+              type="button"
+              onClick={() => remove(idx)}
+              className={`px-3 py-2 rounded-lg border hover:bg-muted ${shouldShowRemove(idx) ? "" : "invisible"}`}
               disabled={!shouldShowRemove(idx)}
             >
               Remove
             </button>
           </div>
         ))}
+
         {items.length === 0 && (
           <p className="text-xs text-muted-foreground">No items yet. Click "Add row".</p>
         )}

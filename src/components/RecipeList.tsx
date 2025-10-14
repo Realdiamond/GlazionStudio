@@ -1,21 +1,22 @@
 import React from 'react';
-import {
-  Select, SelectTrigger, SelectContent, SelectGroup,
-  SelectItem, SelectLabel, SelectSeparator, SelectValue
-} from "@/components/ui/select";
-import { MATERIAL_GROUPS as groups } from "@/data/materials";
-
-
+import { MaterialCombobox } from './MaterialCombobox';
 
 export type RecipeItem = { material: string; amount: number | ''; };
+
+interface Material {
+  name: string;
+  oxideAnalysis?: Record<string, number>;
+  loi?: number;
+}
 
 type Props = {
   title: string;
   items: RecipeItem[];
   onChange: (items: RecipeItem[]) => void;
+  materials: Material[];
 };
 
-export default function RecipeList({ title, items, onChange }: Props) {
+export default function RecipeList({ title, items, onChange, materials }: Props) {
   function update(idx: number, patch: Partial<RecipeItem>) {
     const next = items.map((it, i) => (i === idx ? { ...it, ...patch } : it));
     onChange(next);
@@ -26,17 +27,15 @@ export default function RecipeList({ title, items, onChange }: Props) {
   }
   
   function remove(idx: number) {
-    const next = items.filter((_, i) => i != idx);
+    const next = items.filter((_, i) => i !== idx);
     onChange(next);
   }
 
   // Determine if remove button should be shown
   function shouldShowRemove(index: number): boolean {
-    // For Base Recipe: don't show remove on first item if it's the only one
     if (title === "Base Recipe" && index === 0 && items.length === 1) {
       return false;
     }
-    // For all other cases (additives, or base recipe with multiple items): show remove
     return true;
   }
 
@@ -58,34 +57,14 @@ export default function RecipeList({ title, items, onChange }: Props) {
 
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2">
-            {/* Material dropdown (no repeating label) */}
+            {/* Material combobox (searchable) */}
             <div className="grid gap-2">
-              <Select
-                value={it.material || ""}
-                onValueChange={(value) => update(idx, { material: value })}
-              >
-                <SelectTrigger className="rounded-lg border bg-background p-2" aria-label="Material">
-                  <SelectValue placeholder="Select material" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectLabel>Frits</SelectLabel>
-                    {groups.frit.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
-                    <SelectSeparator />
-                    <SelectLabel>Raw Materials</SelectLabel>
-                    {groups.raw.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
-                    <SelectSeparator />
-                    <SelectLabel>Opacifiers</SelectLabel>
-                    {groups.opacifier.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
-                    <SelectSeparator />
-                    <SelectLabel>Colorants</SelectLabel>
-                    {groups.colorant.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
-                    <SelectSeparator />
-                    <SelectLabel>Additives</SelectLabel>
-                    {groups.additive.map(m => <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>)}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <MaterialCombobox
+                materials={materials}
+                value={it.material}
+                onChange={(value) => update(idx, { material: value })}
+                placeholder="Search material..."
+              />
             </div>
 
             {/* Amount */}
@@ -93,7 +72,7 @@ export default function RecipeList({ title, items, onChange }: Props) {
               className="rounded-lg border bg-background p-2"
               placeholder="Amount"
               inputMode="decimal"
-              type="text"             // or keep type="number" if you prefer
+              type="text"
               value={it.amount === '' ? '' : String(it.amount)}
               onChange={(e) =>
                 update(idx, {
@@ -108,7 +87,7 @@ export default function RecipeList({ title, items, onChange }: Props) {
               %
             </div>
 
-            {/* Remove button (your logic) */}
+            {/* Remove button */}
             <button
               type="button"
               onClick={() => remove(idx)}

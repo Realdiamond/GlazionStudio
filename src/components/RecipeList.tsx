@@ -1,5 +1,5 @@
 import React from 'react';
-import { MaterialCombobox } from './MaterialCombobox';
+import { MaterialAutocomplete } from './MaterialAutocomplete';
 
 export type RecipeItem = { material: string; amount: number | ''; };
 
@@ -31,7 +31,6 @@ export default function RecipeList({ title, items, onChange, materials }: Props)
     onChange(next);
   }
 
-  // Determine if remove button should be shown
   function shouldShowRemove(index: number): boolean {
     if (title === "Base Recipe" && index === 0 && items.length === 1) {
       return false;
@@ -57,15 +56,13 @@ export default function RecipeList({ title, items, onChange, materials }: Props)
 
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2">
-            {/* Material combobox (searchable) */}
-            <div className="grid gap-2">
-              <MaterialCombobox
-                materials={materials}
-                value={it.material}
-                onChange={(value) => update(idx, { material: value })}
-                placeholder="Search material..."
-              />
-            </div>
+            {/* Material autocomplete input */}
+            <MaterialAutocomplete
+              materials={materials}
+              value={it.material}
+              onChange={(value) => update(idx, { material: value })}
+              placeholder="Type to search materials..."
+            />
 
             {/* Amount */}
             <input

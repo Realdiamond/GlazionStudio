@@ -27,7 +27,109 @@ async function generateImageFromRecipeViaProxy(payload: any) {
   return response.json();
 }
 
-// Default flux set
+// Friendly error messages based on error type
+function getFriendlyError(error: any): { title: string; message: string; type: 'validation' | 'network' | 'server' | 'timeout' | 'unknown' } {
+  const errorMsg = error?.message || String(error);
+  
+  // Validation errors (client-side)
+  if (errorMsg.includes('Materials database not loaded')) {
+    return {
+      title: 'Materials Not Ready',
+      message: 'The materials database is still loading. Please wait a moment and try again.',
+      type: 'validation'
+    };
+  }
+  
+  if (errorMsg.includes('Material not found in database')) {
+    return {
+      title: 'Invalid Material',
+      message: 'One or more materials in your recipe are not recognized. Please check your selections.',
+      type: 'validation'
+    };
+  }
+  
+  if (errorMsg.includes('Add at least one recipe line')) {
+    return {
+      title: 'Empty Recipe',
+      message: 'Please add at least one material with an amount to your recipe.',
+      type: 'validation'
+    };
+  }
+  
+  if (errorMsg.includes('Total amount must be greater')) {
+    return {
+      title: 'Invalid Amounts',
+      message: 'The total amount of materials must be greater than zero.',
+      type: 'validation'
+    };
+  }
+
+  // Network/timeout errors
+  if (errorMsg.includes('took too long') || errorMsg.includes('aborted') || errorMsg.includes('timeout')) {
+    return {
+      title: 'Request Timeout',
+      message: 'The image generation is taking longer than expected. This usually happens with complex recipes. Please try again.',
+      type: 'timeout'
+    };
+  }
+
+  if (errorMsg.includes('Failed to fetch') || errorMsg.includes('network')) {
+    return {
+      title: 'Connection Error',
+      message: 'Unable to connect to the server. Please check your internet connection and try again.',
+      type: 'network'
+    };
+  }
+
+  // Server errors (from backend)
+  if (errorMsg.includes('temporarily unavailable') || errorMsg.includes('503')) {
+    return {
+      title: 'Service Unavailable',
+      message: 'The image generation service is temporarily down. Please try again in a few moments.',
+      type: 'server'
+    };
+  }
+
+  if (errorMsg.includes('500') || errorMsg.includes('Internal Server Error')) {
+    return {
+      title: 'Server Error',
+      message: 'Something went wrong on our server. Our team has been notified. Please try again later.',
+      type: 'server'
+    };
+  }
+
+  if (errorMsg.includes('400') || errorMsg.includes('Bad Request')) {
+    return {
+      title: 'Invalid Request',
+      message: 'The recipe data format is incorrect. Please refresh the page and try again.',
+      type: 'validation'
+    };
+  }
+
+  if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+    return {
+      title: 'Authentication Error',
+      message: 'Your session may have expired. Please refresh the page and try again.',
+      type: 'server'
+    };
+  }
+
+  if (errorMsg.includes('No imageUrl returned')) {
+    return {
+      title: 'Generation Failed',
+      message: 'The image was processed but no result was returned. Please try again.',
+      type: 'server'
+    };
+  }
+
+  // Generic fallback
+  return {
+    title: 'Something Went Wrong',
+    message: errorMsg || 'An unexpected error occurred. Please try again.',
+    type: 'unknown'
+  };
+}
+
 const DEFAULT_FLUX_SET: OxideSymbol[] = [
   "K2O", "Na2O", "Li2O", "CaO", "MgO", "BaO", "SrO", "ZnO"
 ];
@@ -43,7 +145,7 @@ export default function RecipesToImage() {
   const [notes, setNotes] = useState('');
 
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ title: string; message: string; type: string } | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
 
@@ -69,7 +171,11 @@ export default function RecipesToImage() {
       console.log(`Loaded ${normalized.length} materials`);
     } catch (err) {
       console.error('Failed to load materials:', err);
-      setError('Failed to load materials database');
+      setError({
+        title: 'Materials Loading Failed',
+        message: 'Unable to load the materials database. Please refresh the page.',
+        type: 'validation'
+      });
     }
   }, []);
 
@@ -158,14 +264,13 @@ export default function RecipesToImage() {
 
       console.log('UMF Result:', chemistry.umf, chemistry.molePct);
 
-      // NEW payload - NO quality field
+      // Clean payload - exactly what backend expects
       const payload = {
         cone: coneNumber,
         atmosphere: atmosphere || undefined,
         umf: chemistry.umf,
         molePct: chemistry.molePct,
         notes: notes || undefined,
-        enhancePrompt: true,
       };
 
       console.log('Sending payload:', payload);
@@ -175,19 +280,41 @@ export default function RecipesToImage() {
       setResultUrl(resp.imageUrl);
     } catch (err: any) {
       console.error('Generation error:', err);
-      setError(err?.message || 'Failed to generate image.');
+      setError(getFriendlyError(err));
     } finally {
       setLoading(false);
     }
   }
 
+  // Error icon based on type
+  const getErrorIcon = (type: string) => {
+    switch (type) {
+      case 'validation':
+        return '⚠️';
+      case 'network':
+        return '📡';
+      case 'server':
+        return '🔧';
+      case 'timeout':
+        return '⏱️';
+      default:
+        return '❌';
+    }
+  };
+
   const previewContent = useMemo(() => {
     if (error) {
       return (
-        <div className="grid h-full w-full place-items-center text-center p-4">
-          <div className="max-w-[90%]">
-            <p className="text-sm text-red-600 font-medium mb-1">Couldn't generate image</p>
-            <p className="text-xs text-red-700/80">{error}</p>
+        <div className="grid h-full w-full place-items-center text-center p-6">
+          <div className="max-w-md space-y-3">
+            <div className="text-4xl mb-2">{getErrorIcon(error.type)}</div>
+            <p className="text-base font-semibold text-gray-900">{error.title}</p>
+            <p className="text-sm text-gray-600 leading-relaxed">{error.message}</p>
+            {error.type === 'timeout' && (
+              <p className="text-xs text-gray-500 mt-2">
+                💡 Tip: Complex recipes with many materials may take longer to process.
+              </p>
+            )}
           </div>
         </div>
       );
@@ -242,8 +369,17 @@ export default function RecipesToImage() {
             </p>
           </header>
 
+          {/* Only show inline error if not loading and no result */}
           {error && !loading && !resultUrl && (
-            <div className="text-sm text-red-600 border border-red-200 bg-red-50 rounded-lg p-2">{error}</div>
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-2">
+              <div className="flex items-start gap-3">
+                <span className="text-xl">{getErrorIcon(error.type)}</span>
+                <div className="flex-1 space-y-1">
+                  <p className="text-sm font-medium text-red-900">{error.title}</p>
+                  <p className="text-sm text-red-700">{error.message}</p>
+                </div>
+              </div>
+            </div>
           )}
 
           <RecipeList 

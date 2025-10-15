@@ -85,44 +85,33 @@ export async function sendMessage(message: string): Promise<string> {
    Recipes → Image: types
    ========================= */
 
-export type RecipeLine = {
-  material: string;
-  amount: number;
-};
-
+// CLEAN REQUEST - exactly what backend expects
 export type RecipesToImageRequest = {
-  firingTemperature: string; // Changed from coneNumber
-  firingAtmosphere?: string; // Changed from atmosphere
-  recipe: RecipeLine[]; // Combined base + additives
+  cone: string;
+  atmosphere?: string;
+  umf: Record<string, number>;
+  molePct: Record<string, number>;
   notes?: string;
-  enhancePrompt: boolean; // Always true, hidden from UI
-  quality: string; // "high" | "medium" | "low"
 };
 
 export type RecipesToImageResponse = {
   id: string;
   recipe: {
-    firingTemperature: string;
-    firingAtmosphere?: string;
-    recipe: Array<{
-      material: string;
-      amount: number;
-    }>;
+    cone: string;
+    atmosphere?: string;
+    umf: Record<string, number>;
+    molePct: Record<string, number>;
     notes?: string;
-    enhancePrompt: boolean;
-    quality: string;
   };
   imageUrl: string;
   isCloudStored: boolean;
   processingTimeMs: number;
-  status: string;              // e.g., "Success"
+  status: string;
   errorMessage: string | null;
-  generatedAt: string;         // ISO datetime
+  generatedAt: string;
   generatedPrompt?: string;
-  enhancedPrompt?: string;
   matchedRecipe?: any;
 };
-
 
 /* =========================
    Recipes → Image: client

@@ -4,7 +4,7 @@ import { z } from 'zod';
 /**
  * Recipes → Image proxy
  * - Forwards safe payload to PRIVATE_API_BASE_URL + PATH
- * - Times out with RECIPE_TIMEOUT_MS (default 50s)
+ * - Times out with RECIPE_TIMEOUT_MS (default 60s)
  * - Circuit breaker counts only network errors, timeouts, and 5xx
  * - 4xx from upstream are passed through and DO NOT trip the breaker
  */
@@ -17,7 +17,7 @@ const PATH = process.env.RECIPE_IMAGE_PATH || '/api/Recipe/image';
 const GENERIC_ERROR_MESSAGE =
   process.env.GENERIC_ERROR_MESSAGE || 'Something went wrong on our side. Please try again.';
 
-// Use recipe-specific timeout, then fall back to general, then 50s default
+// Use recipe-specific timeout, then fall back to general, then 60s default
 const RECIPE_TIMEOUT_MS = Number(
   process.env.RECIPE_TIMEOUT_MS || process.env.QUERY_TIMEOUT_MS || 60000
 );
@@ -51,18 +51,13 @@ function recordSuccess() {
 
 /* ============================== Validation ============================== */
 
-const recipeLine = z.object({
-  material: z.string().min(1),
-  amount: z.number(), // ensure UI sends a number, not a string
-});
-
+// Clean payload schema - NO enhancePrompt, NO quality
 const payloadSchema = z.object({
-  firingTemperature: z.string().min(1),
-  firingAtmosphere: z.string().optional(),
-  recipe: z.array(recipeLine).min(1),
+  cone: z.string().min(1),
+  atmosphere: z.string().optional(),
+  umf: z.record(z.number()), // UMF oxide values
+  molePct: z.record(z.number()), // Mole percent values
   notes: z.string().optional(),
-  enhancePrompt: z.boolean(),
-  quality: z.enum(['high', 'medium', 'low']).or(z.string().min(1)), // tolerate exact or future values
 });
 
 /* ============================== Handler ============================== */
@@ -89,6 +84,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Parse + validate
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const data = payloadSchema.parse(body);
+
+    // Log what we're sending
+    console.log(JSON.stringify({
+      level: 'info',
+      route: '/api/recipes-to-image',
+      action: 'forwarding_to_backend',
+      payload: data,
+    }));
 
     // Timeout via AbortController
     const controller = new AbortController();

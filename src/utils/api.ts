@@ -91,7 +91,7 @@ export type RecipesToImageRequest = {
   atmosphere?: string;
   umf: Record<string, number>;
   molePct: Record<string, number>;
-  notes?: string;
+  note?: string; // ✅ SINGULAR "note" to match backend
 };
 
 export type RecipesToImageResponse = {
@@ -101,7 +101,7 @@ export type RecipesToImageResponse = {
     atmosphere?: string;
     umf: Record<string, number>;
     molePct: Record<string, number>;
-    notes?: string;
+    note?: string; // ✅ SINGULAR "note"
   };
   imageUrl: string;
   isCloudStored: boolean;

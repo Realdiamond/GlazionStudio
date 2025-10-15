@@ -270,7 +270,7 @@ export default function RecipesToImage() {
         atmosphere: atmosphere || undefined,
         umf: chemistry.umf,
         molePct: chemistry.molePct,
-        notes: notes || undefined,
+        note: notes || undefined, 
       };
 
       console.log('Sending payload:', payload);
@@ -383,16 +383,18 @@ export default function RecipesToImage() {
           )}
 
           <RecipeList 
-            title="Base Recipe" 
+            title="Base Glaze" 
             items={base} 
             onChange={setBase}
             materials={materials}
+            isAdditive={false}
           />
           <RecipeList 
-            title="Additives (optional)" 
+            title="Metallic Oxides (Colorants)" 
             items={additives} 
             onChange={setAdditives}
             materials={materials}
+            isAdditive={true}
           />
 
           <div className="grid grid-cols-1 gap-4">

@@ -51,13 +51,13 @@ function recordSuccess() {
 
 /* ============================== Validation ============================== */
 
-// Clean payload schema - NO enhancePrompt, NO quality
+// Clean payload schema - matches backend exactly
 const payloadSchema = z.object({
   cone: z.string().min(1),
   atmosphere: z.string().optional(),
   umf: z.record(z.number()), // UMF oxide values
   molePct: z.record(z.number()), // Mole percent values
-  notes: z.string().optional(),
+  note: z.string().optional(), // ✅ SINGULAR "note" to match backend
 });
 
 /* ============================== Handler ============================== */

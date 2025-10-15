@@ -47,12 +47,6 @@ export default function RecipeList({ title, items, onChange, materials }: Props)
         </button>
       </div>
       <div className="grid gap-2">
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2 px-1 mb-1 text-xs text-muted-foreground">
-          <div>Material</div>
-          <div>Amount</div>
-          <div>%</div>
-          <div></div>
-        </div>
 
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_140px_120px_auto] gap-2">

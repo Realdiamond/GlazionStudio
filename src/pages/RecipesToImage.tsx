@@ -28,7 +28,11 @@ async function generateImageFromRecipeViaProxy(payload: any) {
 }
 
 // Friendly error messages based on error type
-function getFriendlyError(error: any): { title: string; message: string; type: 'validation' | 'network' | 'server' | 'timeout' | 'unknown' } {
+function getFriendlyError(error: any): {
+  title: string;
+  message: string;
+  type: 'validation' | 'network' | 'server' | 'timeout' | 'unknown';
+} {
   const errorMsg = error?.message || String(error);
   
   // Validation errors (client-side)
@@ -39,24 +43,27 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'validation'
     };
   }
-  
-  if (errorMsg.includes('Material not found in database')) {
+  if (errorMsg.includes('Material not found in database') || errorMsg.includes('Material "')) {
     return {
       title: 'Invalid Material',
       message: 'One or more materials in your recipe are not recognized. Please check your selections.',
       type: 'validation'
     };
   }
-  
-  if (errorMsg.includes('Add at least one recipe line')) {
+  if (
+    errorMsg.includes('Add at least one recipe line') ||
+    errorMsg.includes('Base glaze must have at least one material')
+  ) {
     return {
       title: 'Empty Recipe',
       message: 'Please add at least one material with an amount to your recipe.',
       type: 'validation'
     };
   }
-  
-  if (errorMsg.includes('Total amount must be greater')) {
+  if (
+    errorMsg.includes('Total amount must be greater') ||
+    errorMsg.includes('Total base amount must be greater than 0')
+  ) {
     return {
       title: 'Invalid Amounts',
       message: 'The total amount of materials must be greater than zero.',
@@ -72,7 +79,6 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'timeout'
     };
   }
-
   if (errorMsg.includes('Failed to fetch') || errorMsg.includes('network')) {
     return {
       title: 'Connection Error',
@@ -89,7 +95,6 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'server'
     };
   }
-
   if (errorMsg.includes('500') || errorMsg.includes('Internal Server Error')) {
     return {
       title: 'Server Error',
@@ -97,7 +102,6 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'server'
     };
   }
-
   if (errorMsg.includes('400') || errorMsg.includes('Bad Request')) {
     return {
       title: 'Invalid Request',
@@ -105,7 +109,6 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'validation'
     };
   }
-
   if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
     return {
       title: 'Authentication Error',
@@ -113,7 +116,6 @@ function getFriendlyError(error: any): { title: string; message: string; type: '
       type: 'server'
     };
   }
-
   if (errorMsg.includes('No imageUrl returned')) {
     return {
       title: 'Generation Failed',
@@ -145,12 +147,19 @@ export default function RecipesToImage() {
   const [notes, setNotes] = useState('');
 
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<{ title: string; message: string; type: string } | null>(null);
+  type Friendly = ReturnType<typeof getFriendlyError>;
+  const [error, setError] = useState<Friendly | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
 
   const hasPreview = !!resultUrl;
   const coneOptions = getConeOptions();
+
+  // helpers (no structural change to component)
+  const toNum = (v: string | number | undefined) =>
+    typeof v === 'number' ? v : Number.parseFloat(String(v ?? '').trim());
+  const isFiniteNum = (n: unknown): n is number => Number.isFinite(n as number);
+  const norm = (s: string) => s.trim().toLowerCase();
 
   // Load materials from JSON
   useEffect(() => {
@@ -166,7 +175,7 @@ export default function RecipesToImage() {
           loi_pct: Number(m.loi || 0),
           oxideAnalysis: m.oxideAnalysis || {},
         };
-      });
+      }).filter(m => m.name); // filter empty names
       setMaterials(normalized);
       console.log(`Loaded ${normalized.length} materials`);
     } catch (err) {
@@ -204,9 +213,197 @@ export default function RecipesToImage() {
     setFahrenheit(Math.round((newC * 9 / 5) + 32));
   }, []);
 
+  // validation
+  interface ValidationError {
+    field: string;
+    message: string;
+    type: 'warning' | 'error';
+  }
+
+  function validateRecipe(
+    base: RecipeItem[], 
+    additives: RecipeItem[], 
+    materials: Material[]
+  ): ValidationError[] {
+    const errors: ValidationError[] = [];
+
+    // 1. Check if materials are loaded
+    if (materials.length === 0) {
+      errors.push({
+        field: 'materials',
+        message: 'Materials database not loaded. Please refresh the page.',
+        type: 'error'
+      });
+      return errors;
+    }
+
+    // 2. Check base recipe has at least one valid entry
+    const validBase = base.filter(item => item.material && item.amount !== '' && item.amount != null);
+    if (validBase.length === 0) {
+      errors.push({
+        field: 'base',
+        message: 'Base glaze must have at least one material with an amount.',
+        type: 'error'
+      });
+    }
+
+    // 3. Check for empty material names in base
+    base.forEach((item, idx) => {
+      if ((item.amount !== '' && item.amount != null) && !item.material) {
+        errors.push({
+          field: 'base',
+          message: `Base row ${idx + 1}: Material name is required when amount is specified.`,
+          type: 'error'
+        });
+      }
+    });
+
+    // 4. Check for empty amounts in base
+    base.forEach((item, idx) => {
+      if (item.material && (item.amount === '' || item.amount == null)) {
+        errors.push({
+          field: 'base',
+          message: `Base row ${idx + 1}: Amount is required for ${item.material}.`,
+          type: 'error'
+        });
+      }
+    });
+
+    // 5. Amount numeric/negative/zero
+    [...base, ...additives].forEach((item) => {
+      if (!item.material) return;
+      const n = toNum(item.amount);
+      if (!isFiniteNum(n)) {
+        errors.push({
+          field: 'amount',
+          message: `${item.material}: Amount must be a number.`,
+          type: 'error'
+        });
+        return;
+      }
+      if (n < 0) {
+        errors.push({
+          field: 'amount',
+          message: `Negative amounts are not allowed (found: ${n}).`,
+          type: 'error'
+        });
+      }
+      if (n === 0) {
+        errors.push({
+          field: 'amount',
+          message: `${item.material}: Amount must be greater than 0.`,
+          type: 'error'
+        });
+      }
+    });
+
+    // 6. Check for invalid materials (not in database), case-insensitive
+    [...base, ...additives].forEach((item) => {
+      if (item.material) {
+        const exists = materials.find(m => norm(m.name) === norm(item.material!));
+        if (!exists) {
+          errors.push({
+            field: 'material',
+            message: `Material "${item.material}" not found in database.`,
+            type: 'error'
+          });
+        }
+      }
+    });
+
+    // 7. Check for duplicate materials (normalized)
+    const allMaterials = [...base, ...additives]
+      .filter(item => item.material)
+      .map(item => item.material!);
+    const allNorm = allMaterials.map(norm);
+    const duplicates = allMaterials.filter((name, idx) => allNorm.indexOf(norm(name)) !== idx);
+    if (duplicates.length > 0) {
+      errors.push({
+        field: 'material',
+        message: `Duplicate materials found: ${[...new Set(duplicates)].join(', ')}`,
+        type: 'warning'
+      });
+    }
+
+    // 8. Check total base percentage
+    const totalBase = base.reduce((sum, item) => {
+      const n = toNum(item.amount);
+      return sum + (isFiniteNum(n) ? n : 0);
+    }, 0);
+
+    if (totalBase === 0 && validBase.length > 0) {
+      errors.push({
+        field: 'base',
+        message: 'Total base amount must be greater than 0.',
+        type: 'error'
+      });
+    }
+
+    // 9. Warn if base total is far from 100
+    if (totalBase > 0 && (totalBase < 90 || totalBase > 110)) {
+      errors.push({
+        field: 'base',
+        message: `Base total is ${totalBase.toFixed(1)}%. Consider using "Retotal to 100" for accurate percentages.`,
+        type: 'warning'
+      });
+    }
+
+    // 10. Check for very large additive amounts
+    additives.forEach((item) => {
+      if (!item.material) return;
+      const n = toNum(item.amount);
+      if (isFiniteNum(n) && n > 20) {
+        errors.push({
+          field: 'additives',
+          message: `${item.material}: ${n}% is unusually high for a colorant (typically 0.5-15%).`,
+          type: 'warning'
+        });
+      }
+    });
+
+    // 11. Check for empty additives in additives section
+    additives.forEach((item, idx) => {
+      if ((item.amount !== '' && item.amount != null) && !item.material) {
+        errors.push({
+          field: 'additives',
+          message: `Colorant row ${idx + 1}: Material name is required.`,
+          type: 'error'
+        });
+      }
+      if (item.material && (item.amount === '' || item.amount == null)) {
+        errors.push({
+          field: 'additives',
+          message: `Colorant row ${idx + 1}: Amount is required for ${item.material}.`,
+          type: 'error'
+        });
+      }
+    });
+
+    return errors;
+  }
+
+  // Single handleGenerate that performs validation then generation
   async function handleGenerate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    // Run validation first
+    const validationErrors = validateRecipe(base, additives, materials);
+    const errorsOnly = validationErrors.filter(e => e.type === 'error');
+    const warnings = validationErrors.filter(e => e.type === 'warning');
+
+    if (errorsOnly.length > 0) {
+      setError({
+        title: 'Validation Failed',
+        message: errorsOnly.map(e => e.message).join('\n'),
+        type: 'validation'
+      });
+      return;
+    }
+    if (warnings.length > 0) {
+      console.warn('Recipe warnings:', warnings);
+    }
+
     setLoading(true);
     setResultUrl(null);
     setImgLoaded(false);
@@ -216,17 +413,21 @@ export default function RecipesToImage() {
         throw new Error('Materials database not loaded yet. Please wait.');
       }
 
+      // map recipe lines with case-insensitive lookup and numeric parsing
       const allLines = [...base, ...additives]
-        .filter(item => item.material && item.amount)
+        .filter(item => item.material && item.amount !== '' && item.amount != null)
         .map(item => {
-          const mat = materials.find(m => m.name === item.material);
+          const mat = materials.find(m => norm(m.name) === norm(item.material!));
           if (!mat) {
             throw new Error(`Material not found in database: ${item.material}`);
           }
-          
+          const n = toNum(item.amount);
+          if (!isFiniteNum(n)) {
+            throw new Error(`Amount must be a number for ${item.material}`);
+          }
           return {
             materialId: mat.id,
-            partsPct: Number(item.amount),
+            partsPct: n,
           };
         });
 
@@ -239,6 +440,7 @@ export default function RecipesToImage() {
         throw new Error('Total amount must be greater than 0.');
       }
       
+      // normalize to 100%
       allLines.forEach(line => {
         line.partsPct = (line.partsPct / total) * 100;
       });
@@ -276,7 +478,7 @@ export default function RecipesToImage() {
       console.log('Sending payload:', payload);
 
       const resp = await generateImageFromRecipeViaProxy(payload);
-      if (!resp.imageUrl) throw new Error('No imageUrl returned.');
+      if (!resp.imageUrl) throw new Error('No imageUrl returned');
       setResultUrl(resp.imageUrl);
     } catch (err: any) {
       console.error('Generation error:', err);

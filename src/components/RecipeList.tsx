@@ -42,23 +42,32 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
   }
 
   function handleAmountChange(idx: number, value: string) {
-    const trimmed = value.trim();
-    
     // Allow empty string
-    if (trimmed === '') {
+    if (value === '') {
       update(idx, { amount: '' });
       return;
     }
     
-    // Allow valid decimal patterns (including partial entries like "1." or ".5")
-    if (/^-?\d*\.?\d*$/.test(trimmed)) {
-      const num = parseFloat(trimmed);
+    // Only allow valid number patterns (digits and single decimal point)
+    if (/^\d*\.?\d*$/.test(value)) {
+      const num = parseFloat(value);
+      
+      // Always store as number if it's valid, otherwise empty
       if (!isNaN(num)) {
         update(idx, { amount: num });
-      } else if (trimmed === '.' || trimmed === '-' || trimmed.endsWith('.')) {
-        // Allow partial decimal entries
-        update(idx, { amount: trimmed as any });
       }
+    }
+  }
+
+  // Handle blur: clean up incomplete decimals like "89." -> 89
+  function handleAmountBlur(idx: number, currentValue: number | '') {
+    if (currentValue === '' || currentValue === 0) return;
+    
+    // If somehow a trailing decimal made it through, clean it
+    const cleanValue = typeof currentValue === 'number' ? currentValue : parseFloat(String(currentValue));
+    
+    if (!isNaN(cleanValue) && cleanValue !== currentValue) {
+      update(idx, { amount: cleanValue });
     }
   }
 

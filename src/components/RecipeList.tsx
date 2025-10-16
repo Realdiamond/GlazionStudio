@@ -2,7 +2,7 @@ import React from 'react';
 import { MaterialAutocomplete } from './MaterialAutocomplete';
 import { Trash2 } from 'lucide-react';
 
-export type RecipeItem = { material: string; amount: number | ''; };
+export type RecipeItem = { material: string; amount: number | string | ''; };
 
 interface Material {
   name: string;
@@ -49,39 +49,34 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
     }
     
     // Only allow valid number patterns (digits and single decimal point)
-    // Allow: "1", "1.", "1.5", ".5", "10.25"
+    // Allow: "1", "1.", "1.5", ".5", "10.25", "10.0", "10.05"
     if (/^\d*\.?\d*$/.test(value)) {
-      // Allow partial inputs like "1." or "." while typing
-      if (value === '.' || value.endsWith('.')) {
-        // Store as-is temporarily to allow typing
-        update(idx, { amount: value as any });
-        return;
-      }
-      
-      const num = parseFloat(value);
-      
-      // Store as number if valid
-      if (!isNaN(num)) {
-        update(idx, { amount: num });
-      }
+      // Keep as string while typing to preserve "10.0" format
+      // Only convert to number when complete and doesn't end with trailing zeros after decimal
+      update(idx, { amount: value });
     }
   }
 
-  // Handle blur: clean up incomplete decimals like "89." -> 89
-  function handleAmountBlur(idx: number, currentValue: number | '') {
+  // Handle blur: convert valid string to number
+  function handleAmountBlur(idx: number, currentValue: number | string | '') {
     if (currentValue === '' || currentValue === 0) return;
     
-    // If somehow a trailing decimal made it through, clean it
-    const cleanValue = typeof currentValue === 'number' ? currentValue : parseFloat(String(currentValue));
+    const str = String(currentValue);
+    const num = parseFloat(str);
     
-    if (!isNaN(cleanValue) && cleanValue !== currentValue) {
-      update(idx, { amount: cleanValue });
+    // Convert to number on blur if valid
+    if (!isNaN(num) && num !== currentValue) {
+      update(idx, { amount: num });
     }
   }
 
   // Calculate total percentage
   const total = items.reduce((sum, item) => {
-    const amount = typeof item.amount === 'number' ? item.amount : 0;
+    const amount = item.amount === '' || item.amount == null 
+      ? 0 
+      : typeof item.amount === 'number' 
+        ? item.amount 
+        : parseFloat(item.amount) || 0;
     return sum + amount;
   }, 0);
 
@@ -104,12 +99,20 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
                   onClick={() => {
                     // Retotal to 100: normalize all amounts proportionally
                     if (total > 0) {
-                      const normalized = items.map(item => ({
-                        ...item,
-                        amount: typeof item.amount === 'number' 
-                          ? parseFloat(((item.amount / total) * 100).toFixed(2))
-                          : item.amount
-                      }));
+                      const normalized = items.map(item => {
+                        const currentAmount = item.amount === '' || item.amount == null 
+                          ? 0 
+                          : typeof item.amount === 'number' 
+                            ? item.amount 
+                            : parseFloat(item.amount) || 0;
+                        
+                        return {
+                          ...item,
+                          amount: currentAmount > 0 
+                            ? parseFloat(((currentAmount / total) * 100).toFixed(2))
+                            : item.amount
+                        };
+                      });
                       onChange(normalized);
                     }
                   }}

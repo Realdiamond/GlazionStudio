@@ -49,10 +49,18 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
     }
     
     // Only allow valid number patterns (digits and single decimal point)
+    // Allow: "1", "1.", "1.5", ".5", "10.25"
     if (/^\d*\.?\d*$/.test(value)) {
+      // Allow partial inputs like "1." or "." while typing
+      if (value === '.' || value.endsWith('.')) {
+        // Store as-is temporarily to allow typing
+        update(idx, { amount: value as any });
+        return;
+      }
+      
       const num = parseFloat(value);
       
-      // Always store as number if it's valid, otherwise empty
+      // Store as number if valid
       if (!isNaN(num)) {
         update(idx, { amount: num });
       }
@@ -137,6 +145,9 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
               type="text"
               value={it.amount === '' ? '' : String(it.amount)}
               onChange={(e) => handleAmountChange(idx, e.target.value)}
+              onBlur={() => handleAmountBlur(idx, it.amount)}
+              min="0"
+              step="0.01"
               required
             />
 

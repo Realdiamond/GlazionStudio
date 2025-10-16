@@ -12,7 +12,7 @@ import { z } from 'zod';
 /* ============================== Config ============================== */
 
 const BASE_URL = process.env.PRIVATE_API_BASE_URL; // required
-const PATH = process.env.RECIPE_IMAGE_PATH || '/api/Recipe/image';
+const PATH = process.env.RECIPE_IMAGE_PATH || '/api/GlazeImageGeneration/generate';
 
 const GENERIC_ERROR_MESSAGE =
   process.env.GENERIC_ERROR_MESSAGE || 'Something went wrong on our side. Please try again.';

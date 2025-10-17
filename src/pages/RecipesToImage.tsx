@@ -532,7 +532,7 @@ export default function RecipesToImage() {
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" opacity="0.25" />
                 <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" fill="none" strokeLinecap="round" />
               </svg>
-              <p className="text-xs text-muted-foreground">Generating glaze preview…</p>
+              <p className="text-xs text-muted-foreground">Generating glaze result…</p>
             </div>
           </div>
         </div>
@@ -542,7 +542,7 @@ export default function RecipesToImage() {
     if (!hasPreview) {
       return (
         <div className="grid h-full w-full place-items-center">
-          <span className="text-sm text-muted-foreground">No preview yet</span>
+          <span className="text-sm text-muted-foreground">No result yet</span>
         </div>
       );
     }
@@ -674,7 +674,7 @@ export default function RecipesToImage() {
 
         <aside className="grid gap-4">
           <div className="rounded-xl border p-3 bg-card">
-            <div className="text-sm font-medium mb-2">Preview</div>
+            <div className="text-sm font-medium mb-2">Glaze Result</div>
             <div className="relative mx-auto w-full max-w-[512px] aspect-square rounded-lg border overflow-hidden bg-background">
               {previewContent}
             </div>

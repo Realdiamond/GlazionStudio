@@ -132,7 +132,7 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
       <div className="grid gap-2">
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
-            {/* Material autocomplete input */}
+            
             <MaterialAutocomplete
               materials={materials}
               value={it.material}
@@ -154,7 +154,7 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
               required
             />
 
-            {/* Delete icon button */}
+            
             {shouldShowRemove(idx) ? (
               <button
                 type="button"

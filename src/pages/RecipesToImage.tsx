@@ -673,7 +673,7 @@ export default function RecipesToImage() {
         </form>
 
         <aside className="grid gap-4">
-          <div className="md:sticky md:top-6 rounded-xl border p-3 bg-card">
+          <div className="md:sticky md:top-20 rounded-xl border p-3 bg-card">
             <div className="text-sm font-medium mb-2">Glaze Result</div>
             <div className="relative mx-auto w-full max-w-[512px] aspect-square rounded-lg border overflow-hidden bg-background">
               {previewContent}

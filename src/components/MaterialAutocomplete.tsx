@@ -27,7 +27,7 @@ export function MaterialAutocomplete({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Filter materials based on input - CASE INSENSITIVE and ALPHABETICALLY SORTED
+  // Filter materials based on input - SMART SORTING: starts-with first, then contains
   const filteredMaterials = useMemo(() => {
     if (!inputValue.trim()) {
       // Show all materials alphabetically when empty
@@ -36,13 +36,24 @@ export function MaterialAutocomplete({
     
     const searchLower = inputValue.toLowerCase().trim();
     
-    // Find ALL matching materials (case-insensitive)
-    const matches = materials.filter(m => 
-      m.name.toLowerCase().includes(searchLower)
-    );
+    // Split into two groups: starts with search term, and contains search term
+    const startsWith: Material[] = [];
+    const contains: Material[] = [];
     
-    // Sort alphabetically
-    return matches.sort((a, b) => a.name.localeCompare(b.name));
+    materials.forEach(m => {
+      const nameLower = m.name.toLowerCase();
+      if (nameLower.startsWith(searchLower)) {
+        startsWith.push(m);
+      } else if (nameLower.includes(searchLower)) {
+        contains.push(m);
+      }
+    });
+    
+    // Sort each group alphabetically, then combine
+    startsWith.sort((a, b) => a.name.localeCompare(b.name));
+    contains.sort((a, b) => a.name.localeCompare(b.name));
+    
+    return [...startsWith, ...contains];
   }, [materials, inputValue]);
 
   // Check if input matches exactly (case-insensitive)
@@ -176,7 +187,7 @@ export function MaterialAutocomplete({
         </div>
       )}
 
-      {/* Dropdown - ALWAYS show all matching results */}
+      {/* Dropdown - ALWAYS show all matching results, STARTS-WITH first */}
       {isOpen && filteredMaterials.length > 0 && (
         <div
           ref={dropdownRef}

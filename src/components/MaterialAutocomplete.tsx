@@ -23,26 +23,41 @@ export function MaterialAutocomplete({
   const [inputValue, setInputValue] = useState(value);
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [showCaseWarning, setShowCaseWarning] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Filter materials based on input
+  // Filter materials based on input - CASE INSENSITIVE and ALPHABETICALLY SORTED
   const filteredMaterials = useMemo(() => {
     if (!inputValue.trim()) {
-      return materials.slice(0, 100);
+      // Show all materials alphabetically when empty
+      return [...materials].sort((a, b) => a.name.localeCompare(b.name));
     }
     
     const searchLower = inputValue.toLowerCase().trim();
+    
+    // Find ALL matching materials (case-insensitive)
     const matches = materials.filter(m => 
       m.name.toLowerCase().includes(searchLower)
     );
     
-    return matches.slice(0, 100);
+    // Sort alphabetically
+    return matches.sort((a, b) => a.name.localeCompare(b.name));
   }, [materials, inputValue]);
+
+  // Check if input matches exactly (case-insensitive)
+  const exactMatch = useMemo(() => {
+    const inputLower = inputValue.toLowerCase().trim();
+    return materials.find(m => m.name.toLowerCase() === inputLower);
+  }, [materials, inputValue]);
+
+  // Check if value is valid (exact match in database)
+  const isValidSelection = materials.some(m => m.name === value);
 
   // Update input value when prop changes
   useEffect(() => {
     setInputValue(value);
+    setShowCaseWarning(false);
   }, [value]);
 
   // Close dropdown when clicking outside
@@ -67,12 +82,27 @@ export function MaterialAutocomplete({
     setIsOpen(true);
     setHighlightedIndex(0);
     
-    // Only update parent if exact match exists
-    const exactMatch = materials.find(m => m.name === newValue);
-    if (exactMatch) {
-      onChange(newValue);
-    } else if (value !== '') {
-      onChange(''); // Clear parent if no exact match
+    // Check if there's an exact match (case-insensitive)
+    const inputLower = newValue.toLowerCase().trim();
+    const match = materials.find(m => m.name.toLowerCase() === inputLower);
+    
+    if (match) {
+      // If exact match found but different case, show warning
+      if (match.name !== newValue) {
+        setShowCaseWarning(true);
+        onChange(''); // Don't set value yet - let user pick from dropdown
+      } else {
+        // Perfect match - set the value
+        onChange(match.name);
+        setShowCaseWarning(false);
+      }
+    } else {
+      // No exact match yet - don't clear parent, just let user keep typing
+      setShowCaseWarning(false);
+      // Only clear parent if they had a valid selection before
+      if (value !== '') {
+        onChange('');
+      }
     }
   };
 
@@ -80,6 +110,7 @@ export function MaterialAutocomplete({
     setInputValue(materialName);
     onChange(materialName);
     setIsOpen(false);
+    setShowCaseWarning(false);
     inputRef.current?.blur();
   };
 
@@ -115,8 +146,6 @@ export function MaterialAutocomplete({
     }
   };
 
-  const isValidSelection = materials.some(m => m.name === value);
-
   return (
     <div className="relative w-full">
       <input
@@ -128,17 +157,26 @@ export function MaterialAutocomplete({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         className={`w-full rounded-lg border px-3 py-2 bg-background focus:outline-none focus:ring-2 focus:ring-primary ${
-          inputValue && !isValidSelection ? 'border-red-500' : ''
+          inputValue && !isValidSelection && !showCaseWarning ? 'border-red-500' : ''
+        } ${
+          showCaseWarning ? 'border-amber-500' : ''
         }`}
         autoComplete="off"
       />
 
-      {/* Validation indicator */}
+      {/* Validation indicator - Green checkmark for exact match */}
       {inputValue && isValidSelection && (
         <Check className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-600" />
       )}
 
-      {/* Dropdown */}
+      {/* Case warning - when typed correctly but wrong case */}
+      {showCaseWarning && exactMatch && (
+        <div className="absolute left-0 right-0 top-full mt-1 z-40 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
+          ⚠️ Please choose "{exactMatch.name}" from the dropdown
+        </div>
+      )}
+
+      {/* Dropdown - ALWAYS show all matching results */}
       {isOpen && filteredMaterials.length > 0 && (
         <div
           ref={dropdownRef}
@@ -152,7 +190,7 @@ export function MaterialAutocomplete({
               className={`
                 px-3 py-2 cursor-pointer text-sm
                 ${index === highlightedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'}
-                ${material.name === value ? 'font-medium' : ''}
+                ${material.name === value ? 'font-medium bg-green-50' : ''}
               `}
             >
               {material.name}

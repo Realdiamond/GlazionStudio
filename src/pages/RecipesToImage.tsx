@@ -152,6 +152,14 @@ export default function RecipesToImage() {
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
 
+  // Validation warnings state
+  interface ValidationError {
+    field: string;
+    message: string;
+    type: 'warning' | 'error';
+  }
+  const [validationWarnings, setValidationWarnings] = useState<ValidationError[]>([]);
+
   const hasPreview = !!resultUrl;
   const coneOptions = getConeOptions();
 
@@ -213,13 +221,80 @@ export default function RecipesToImage() {
     setFahrenheit(Math.round((newC * 9 / 5) + 32));
   }, []);
 
-  // validation
-  interface ValidationError {
-    field: string;
-    message: string;
-    type: 'warning' | 'error';
-  }
+  // Calculate totals
+  const baseTotal = useMemo(() => {
+    return base.reduce((sum, item) => {
+      const n = toNum(item.amount);
+      return sum + (isFiniteNum(n) ? n : 0);
+    }, 0);
+  }, [base]);
 
+  const additivesTotal = useMemo(() => {
+    return additives.reduce((sum, item) => {
+      const n = toNum(item.amount);
+      return sum + (isFiniteNum(n) ? n : 0);
+    }, 0);
+  }, [additives]);
+
+  const overallTotal = useMemo(() => {
+    return baseTotal + additivesTotal;
+  }, [baseTotal, additivesTotal]);
+
+  // Retotal functions
+  const retotalBase = useCallback(() => {
+    if (baseTotal <= 0) return;
+    const newBase = base.map(item => {
+      const n = toNum(item.amount);
+      if (!isFiniteNum(n) || n <= 0) return item;
+      return {
+        ...item,
+        amount: parseFloat(((n / baseTotal) * 100).toFixed(2))
+      };
+    });
+    setBase(newBase);
+  }, [base, baseTotal]);
+
+  const retotalAdditives = useCallback(() => {
+    if (additivesTotal <= 0) return;
+    const newAdditives = additives.map(item => {
+      const n = toNum(item.amount);
+      if (!isFiniteNum(n) || n <= 0) return item;
+      return {
+        ...item,
+        amount: parseFloat(((n / additivesTotal) * 100).toFixed(2))
+      };
+    });
+    setAdditives(newAdditives);
+  }, [additives, additivesTotal]);
+
+  const retotalAll = useCallback(() => {
+    if (overallTotal <= 0) return;
+    
+    // Retotal base proportionally
+    const newBase = base.map(item => {
+      const n = toNum(item.amount);
+      if (!isFiniteNum(n) || n <= 0) return item;
+      return {
+        ...item,
+        amount: parseFloat(((n / overallTotal) * 100).toFixed(2))
+      };
+    });
+    
+    // Retotal additives proportionally
+    const newAdditives = additives.map(item => {
+      const n = toNum(item.amount);
+      if (!isFiniteNum(n) || n <= 0) return item;
+      return {
+        ...item,
+        amount: parseFloat(((n / overallTotal) * 100).toFixed(2))
+      };
+    });
+    
+    setBase(newBase);
+    setAdditives(newAdditives);
+  }, [base, additives, overallTotal]);
+
+  // validation
   function validateRecipe(
     base: RecipeItem[], 
     additives: RecipeItem[], 
@@ -402,6 +477,9 @@ export default function RecipesToImage() {
     }
     if (warnings.length > 0) {
       console.warn('Recipe warnings:', warnings);
+      setValidationWarnings(warnings); // Store warnings to display in UI
+    } else {
+      setValidationWarnings([]); // Clear warnings if validation passes
     }
 
     setLoading(true);
@@ -584,6 +662,23 @@ export default function RecipesToImage() {
             </div>
           )}
 
+          {/* Display validation warnings */}
+          {validationWarnings.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-2">
+              <div className="flex items-start gap-3">
+                <span className="text-xl">⚠️</span>
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm font-medium text-amber-900">Recipe Warnings</p>
+                  <ul className="text-sm text-amber-700 space-y-1 list-disc list-inside">
+                    {validationWarnings.map((warning, idx) => (
+                      <li key={idx}>{warning.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           <RecipeList 
             title="Base Glaze" 
             items={base} 
@@ -591,6 +686,29 @@ export default function RecipesToImage() {
             materials={materials}
             isAdditive={false}
           />
+
+          {/* Base Total and Retotal */}
+          <div className="flex items-center justify-between px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-700">Base Total:</span>
+              <span className={`text-lg font-semibold px-3 py-1 rounded ${
+                baseTotal >= 99 && baseTotal <= 101 
+                  ? 'bg-green-100 text-green-800' 
+                  : 'bg-amber-100 text-amber-800'
+              }`}>
+                {baseTotal.toFixed(2)}%
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={retotalBase}
+              disabled={baseTotal <= 0}
+              className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Retotal to 100
+            </button>
+          </div>
+
           <RecipeList 
             title="Metallic Oxides (Colorants)" 
             items={additives} 
@@ -598,6 +716,46 @@ export default function RecipesToImage() {
             materials={materials}
             isAdditive={true}
           />
+
+          {/* Additives Total and Retotal */}
+          <div className="flex items-center justify-between px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-700">Oxides Total:</span>
+              <span className="text-lg font-semibold bg-blue-100 text-blue-800 px-3 py-1 rounded">
+                {additivesTotal.toFixed(2)}%
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={retotalAdditives}
+              disabled={additivesTotal <= 0}
+              className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Retotal to 100
+            </button>
+          </div>
+
+          {/* Overall Total and Retotal All */}
+          <div className="flex items-center justify-between px-4 py-3 bg-purple-50 border border-purple-200 rounded-lg">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-700">Overall Total:</span>
+              <span className={`text-lg font-semibold px-3 py-1 rounded ${
+                overallTotal >= 99 && overallTotal <= 101 
+                  ? 'bg-green-100 text-green-800' 
+                  : 'bg-purple-100 text-purple-800'
+              }`}>
+                {overallTotal.toFixed(2)}%
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={retotalAll}
+              disabled={overallTotal <= 0}
+              className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Retotal All to 100
+            </button>
+          </div>
 
           <div className="grid grid-cols-1 gap-4">
             <div className="grid gap-4">

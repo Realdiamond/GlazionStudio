@@ -96,8 +96,8 @@ export function MaterialAutocomplete({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     setInputValue(newValue);
-    setIsOpen(true);
-    setHighlightedIndex(0);
+    setIsOpen(true); // Always keep dropdown open while typing
+    setHighlightedIndex(0); // Reset to first item
     
     // Check if there's an exact match (case-insensitive)
     const inputLower = newValue.toLowerCase().trim();
@@ -114,10 +114,10 @@ export function MaterialAutocomplete({
         setShowCaseWarning(false);
       }
     } else {
-      // No exact match yet - don't clear parent, just let user keep typing
+      // No exact match - clear warning and let user continue typing
       setShowCaseWarning(false);
-      // Only clear parent if they had a valid selection before
-      if (value !== '') {
+      // Clear parent selection since input doesn't match anymore
+      if (value !== '' && newValue !== value) {
         onChange('');
       }
     }

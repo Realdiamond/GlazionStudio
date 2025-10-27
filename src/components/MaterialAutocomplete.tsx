@@ -27,33 +27,39 @@ export function MaterialAutocomplete({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Filter materials based on input - SMART SORTING: starts-with first, then contains
+  // Filter and sort materials based on input
   const filteredMaterials = useMemo(() => {
+    // Show first 100 materials alphabetically when empty
     if (!inputValue.trim()) {
-      // Show all materials alphabetically when empty
-      return [...materials].sort((a, b) => a.name.localeCompare(b.name));
+      return [...materials]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, 100);
     }
     
     const searchLower = inputValue.toLowerCase().trim();
     
-    // Split into two groups: starts with search term, and contains search term
-    const startsWith: Material[] = [];
-    const contains: Material[] = [];
+    // Find ALL materials that contain the search term
+    const matches = materials.filter(m => 
+      m.name.toLowerCase().includes(searchLower)
+    );
     
-    materials.forEach(m => {
-      const nameLower = m.name.toLowerCase();
-      if (nameLower.startsWith(searchLower)) {
-        startsWith.push(m);
-      } else if (nameLower.includes(searchLower)) {
-        contains.push(m);
-      }
+    // Sort by: starts-with first, then alphabetically within each group
+    matches.sort((a, b) => {
+      const aLower = a.name.toLowerCase();
+      const bLower = b.name.toLowerCase();
+      const aStarts = aLower.startsWith(searchLower);
+      const bStarts = bLower.startsWith(searchLower);
+      
+      // If one starts with search and other doesn't, prioritize the one that starts
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+      
+      // Both start with search OR both don't start with search
+      // Sort alphabetically
+      return a.name.localeCompare(b.name);
     });
     
-    // Sort each group alphabetically, then combine
-    startsWith.sort((a, b) => a.name.localeCompare(b.name));
-    contains.sort((a, b) => a.name.localeCompare(b.name));
-    
-    return [...startsWith, ...contains];
+    return matches;
   }, [materials, inputValue]);
 
   // Check if input matches exactly (case-insensitive)
@@ -187,7 +193,7 @@ export function MaterialAutocomplete({
         </div>
       )}
 
-      {/* Dropdown - ALWAYS show all matching results, STARTS-WITH first */}
+      {/* Dropdown - Show ALL matching results */}
       {isOpen && filteredMaterials.length > 0 && (
         <div
           ref={dropdownRef}

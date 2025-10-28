@@ -1,28 +1,26 @@
 /**
- * Users always see a friendly message on failure (never raw errors).
- * Real errors are logged as single-line structured JSON via console.error.
- * Branch/metrics logs use console.log (also single-line JSON).
- *
- * Single upstream:
- *    GET {PRIVATE_API_BASE_URL}/api/Query/ask?question=...&topK=...&includeSuggestions=...&includeContext=...
- *
- * Rules:
- * - Render upstream Markdown as-is (after link blocklist sanitization).
- * - Confidence floor for caching: >= CONV_CONFIDENCE_MIN (default 0.6).
- * - Adaptive TopK: if confidence < 0.7 and initial TopK ≤ 8, do ONE retry with +3 (cap 12).
- * - Cache: in-memory TTL 60s; DO NOT cache friendly error text or weak answers.
- * - Circuit breaker: 3 consecutive failures → skip upstream for 60s.
- * - Timeouts: 10s per upstream call.
- * - Back-compat: returns { answer, ... } and also { content: answer }.
+ * GlazionStudio Chat API - Three-Endpoint Strategy
+ * 
+ * Flow:
+ * 1. Hit Knowledge Base endpoint (RAG-based answers)
+ * 2. Hit GPT Direct endpoint (Conversational AI)
+ * 3. Send both answers to GPT Merge endpoint for intelligent combination
+ * 
+ * Features:
+ * - Parallel requests for KB and GPT Direct
+ * - Intelligent merging via GPT
+ * - Comprehensive error handling
+ * - Structured logging
+ * - Caching of final merged responses
+ * - Circuit breaker protection
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 /* ============================== Env & constants ============================== */
 
-const RAW_BASE = String(process.env.PRIVATE_API_BASE_URL || '').replace(/\/+$/, ''); // REQUIRED, no trailing slash
+const RAW_BASE = String(process.env.PRIVATE_API_BASE_URL || '').replace(/\/+$/, '');
 const QUERY_TIMEOUT_MS = Number(process.env.QUERY_TIMEOUT_MS || 10_000);
-const CONV_CONFIDENCE_MIN = Number(process.env.CONV_CONFIDENCE_MIN || 0.6);
 
 const CACHE_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
 const MAX_CACHE_ENTRIES = Number(process.env.MAX_CACHE_ENTRIES || 1000);
@@ -30,57 +28,89 @@ const MAX_CACHE_ENTRIES = Number(process.env.MAX_CACHE_ENTRIES || 1000);
 const CIRCUIT_BREAKER_THRESHOLD = Number(process.env.CIRCUIT_BREAKER_THRESHOLD || 3);
 const CIRCUIT_BREAKER_COOLDOWN_MS = Number(process.env.CIRCUIT_BREAKER_COOLDOWN_MS || 60_000);
 
-const STRICT_LINK_BLOCKLIST = String(process.env.STRICT_LINK_BLOCKLIST || 'digitalfire.com')
-  .split(',')
-  .map(s => s.trim().toLowerCase())
-  .filter(Boolean);
-
-const GENERIC_ERROR_MESSAGE =
-  String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
+const GENERIC_ERROR_MESSAGE = String(process.env.GENERIC_ERROR_MESSAGE || '').trim()
   || 'Something went wrong. Please try again.';
 
-/* ============================== Types (internal) ============================== */
-type QueryRequest = {
-  query: string;
-  topK?: number;
-  includeMetadata?: boolean; // maps to includeContext (default true)
-  conversationId?: string;   // accepted for back-compat; not sent upstream
-  userId?: string;           // forwarded upstream
-};
+// GPT Direct defaults
+const GPT_DEFAULT_MAX_TOKENS = Number(process.env.GPT_DEFAULT_MAX_TOKENS || 600);
+const GPT_DEFAULT_TEMPERATURE = Number(process.env.GPT_DEFAULT_TEMPERATURE || 0.85);
 
-type QuerySource = {
+// GPT Merge settings
+const GPT_MERGE_MAX_TOKENS = Number(process.env.GPT_MERGE_MAX_TOKENS || 800);
+const GPT_MERGE_TEMPERATURE = Number(process.env.GPT_MERGE_TEMPERATURE || 0.75);
+
+/* ============================== Types ============================== */
+
+// Knowledge Base Response
+interface KnowledgeBaseResponse {
+  query: string;
+  answer: string;
+  matches: Array<{
+    id: string;
+    score: number;
+    content: string;
+    metadata: Record<string, any>;
+  }>;
+  totalMatches: number;
+  source: string;
+  timestamp: string;
+}
+
+// GPT Direct Response
+interface GPTDirectResponse {
+  query: string;
+  answer: string;
+  isRestricted: boolean;
+  restrictionReason: string | null;
+  model: string;
+  tokensUsed: number;
+  timestamp: string;
+}
+
+// Final combined response
+interface CombinedChatResponse {
+  answer: string;
   content: string;
   confidence: number;
-  sourceFolder: string;
-  metadata?: any;
-};
+  metadata: {
+    knowledgeBase?: {
+      success: boolean;
+      matches?: any[];
+      source?: string;
+      error?: string;
+    };
+    gptDirect?: {
+      success: boolean;
+      model?: string;
+      tokensUsed?: number;
+      isRestricted?: boolean;
+      error?: string;
+    };
+    merge?: {
+      success: boolean;
+      tokensUsed?: number;
+      error?: string;
+    };
+    totalTokensUsed: number;
+    processingTimeMs: number;
+  };
+}
 
-type QueryResponse = {
-  answer: string;
-  confidence: number; // 0..1
-  conversationId?: string;
-  sources?: QuerySource[];
-  processingTimeMs?: number;
-  queryType?: string;
-};
-
-/* ============================== Tiny in-memory LRU cache ============================== */
-type CacheEntry = { value: QueryResponse; expiresAt: number };
+/* ============================== Cache ============================== */
+type CacheEntry = { value: CombinedChatResponse; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
 
-function getCache(key: string): QueryResponse | null {
+function getCache(key: string): CombinedChatResponse | null {
   const hit = cache.get(key);
   if (!hit) return null;
   if (Date.now() > hit.expiresAt) { cache.delete(key); return null; }
-  // refresh LRU
   cache.delete(key);
   cache.set(key, hit);
   return hit.value;
 }
 
-function setCache(key: string, value: QueryResponse, ttlSec = CACHE_TTL_SECONDS) {
+function setCache(key: string, value: CombinedChatResponse, ttlSec = CACHE_TTL_SECONDS) {
   if (!ttlSec) return;
-  // simple LRU cap
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest) cache.delete(oldest);
@@ -88,7 +118,7 @@ function setCache(key: string, value: QueryResponse, ttlSec = CACHE_TTL_SECONDS)
   cache.set(key, { value, expiresAt: Date.now() + ttlSec * 1000 });
 }
 
-/* ============================== Circuit breaker (single upstream) ============================== */
+/* ============================== Circuit breaker ============================== */
 type Breaker = { fails: number; until?: number };
 const cb: Breaker = { fails: 0, until: undefined };
 
@@ -106,10 +136,9 @@ function breakerOk() {
   cb.fails = 0; cb.until = undefined;
 }
 
-/* ============================== Helpers: ids + logging ============================== */
+/* ============================== Helpers ============================== */
 function reqId(): string {
   try {
-    // @ts-ignore
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   } catch {}
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -126,26 +155,6 @@ function normalizeMessage(s: string): string {
   return String(s || '').trim().replace(/\s+/g, ' ');
 }
 
-/* ============================== Link blocklist sanitiser ============================== */
-function stripBlockedLinks(text: string): { out: string; blocked: number; domains: string[] } {
-  if (!text) return { out: '', blocked: 0, domains: [] };
-  let s = text, count = 0; const touched = new Set<string>();
-
-  for (const dom of STRICT_LINK_BLOCKLIST) {
-    const esc = dom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rawUrlRx = new RegExp(`https?:\\/\\/(?:www\\.)?${esc}[^\\s)\\]]*`, 'gi');
-    const mdLinkRx = new RegExp(`\\[([^\\]]+)\\]\\((https?:\\/\\/(?:www\\.)?${esc}[^\\s)\\]]*)\\)`, 'gi');
-
-    s = s.replace(rawUrlRx, () => { count++; touched.add(dom); return ''; });
-    s = s.replace(mdLinkRx, (_m, txt: string) => { count++; touched.add(dom); return txt; });
-  }
-
-  // tidy blank list items / extra newlines
-  s = s.replace(/^\s*[-•]\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
-  return { out: s, blocked: count, domains: Array.from(touched) };
-}
-
-/* ============================== Fetch helper with timeout ============================== */
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -156,102 +165,216 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-/* ============================== TopK heuristics ============================== */
-function determineInitialTopK(message: string, requested?: number): number {
-  if (typeof requested === 'number' && requested > 0) return Math.min(Math.max(1, requested), 12);
+/* ============================== API Calls ============================== */
 
-  const msg = message.toLowerCase();
-  const words = msg.split(/\s+/).filter(Boolean);
-  const isShort = words.length <= 5 && msg.length < 50;
-
-  const complexityTerms = [' and ', ' or ', ' vs ', 'compare', 'list', 'step by step', 'why', 'how to', 'fix', 'troubleshoot'];
-  const isComplex = complexityTerms.some(t => msg.includes(t)) || words.length > 15;
-
-  const comprehensiveTerms = ['all', 'everything', 'complete', 'detailed', 'step by step'];
-  const isComprehensive = comprehensiveTerms.some(t => msg.includes(t));
-
-  if (isShort) return 3;
-  if (isComprehensive) return 10;
-  if (isComplex) return 8;
-  return 5;
-}
-
-/* ============================== Upstream call (GET with query params) ============================== */
-
-type UpstreamAskParams = {
-  question: string;
-  userId?: string;
-  topK?: number;
-  includeSuggestions?: boolean; // default: true
-  includeContext?: boolean;     // maps from includeMetadata
-};
-
-// Shape returned by upstream swagger now (partial, we only map what we need)
-type UpstreamAskResponse = {
-  answer?: string;
-  query?: string;
-  success?: boolean;
-  confidence?: number;
-  responseType?: string;
-  matches?: any[];
-  sources?: QuerySource[];      // assuming compatible
-  internetSources?: any[];
-  suggestedQuestions?: string[];
-  responseTime?: string;        // ISO timestamp
-  requestId?: string;           // we map to conversationId
-  [k: string]: any;
-};
-
-async function callUpstream(
-  body: QueryRequest,
+/**
+ * Call Knowledge Base endpoint
+ */
+async function callKnowledgeBase(
+  query: string,
   timeoutMs: number
-): Promise<
-  | { ok: true; data: QueryResponse; ms: number }
-  | { ok: false; error: string; status?: number; ms: number }
-> {
+): Promise<{ ok: true; data: KnowledgeBaseResponse; ms: number } | { ok: false; error: string; ms: number }> {
   const started = Date.now();
   try {
-    const params: UpstreamAskParams = {
-      question: body.query,
-      userId: body.userId,
-      topK: body.topK,
-      includeSuggestions: true,
-      includeContext: body.includeMetadata !== false, // default true
-    };
+    const url = `${RAW_BASE}/api/SpecializedQA/knowledge-base`;
+    const r = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query })
+    }, timeoutMs);
 
-    const usp = new URLSearchParams();
-    Object.entries(params).forEach(([k, v]) => {
-      if (v === undefined || v === null) return;
-      usp.set(k, typeof v === 'boolean' ? String(v) : String(v));
-    });
-
-    const url = `${RAW_BASE}/api/Query/ask?${usp.toString()}`;
-    const r = await fetchWithTimeout(url, { method: 'GET' }, timeoutMs);
     const ms = Date.now() - started;
 
     if (!r.ok) {
       let text = '';
       try { text = await r.text(); } catch {}
-      return { ok: false, status: r.status, error: text || `HTTP ${r.status}`, ms };
+      return { ok: false, error: text || `HTTP ${r.status}`, ms };
     }
 
-    const raw = (await r.json()) as UpstreamAskResponse;
-
-    const normalized: QueryResponse = {
-      answer: raw?.answer ?? '',
-      confidence: typeof raw?.confidence === 'number' ? raw.confidence : 0,
-      conversationId: raw?.requestId,     // map new -> old name
-      sources: Array.isArray(raw?.sources) ? raw.sources : [],
-      processingTimeMs: undefined,         // upstream gives ISO responseTime; we keep undefined for now
-      queryType: raw?.responseType,
-    };
-
-    return { ok: true, data: normalized, ms };
+    const data = await r.json() as KnowledgeBaseResponse;
+    return { ok: true, data, ms };
   } catch (e: any) {
     const ms = Date.now() - started;
     const msg = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fetch_error');
     return { ok: false, error: msg, ms };
   }
+}
+
+/**
+ * Call GPT Direct endpoint
+ */
+async function callGPTDirect(
+  query: string,
+  maxTokens: number,
+  temperature: number,
+  timeoutMs: number
+): Promise<{ ok: true; data: GPTDirectResponse; ms: number } | { ok: false; error: string; ms: number }> {
+  const started = Date.now();
+  try {
+    const url = `${RAW_BASE}/api/SpecializedQA/gpt-direct`;
+    const r = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, maxTokens, temperature })
+    }, timeoutMs);
+
+    const ms = Date.now() - started;
+
+    if (!r.ok) {
+      let text = '';
+      try { text = await r.text(); } catch {}
+      return { ok: false, error: text || `HTTP ${r.status}`, ms };
+    }
+
+    const data = await r.json() as GPTDirectResponse;
+    return { ok: true, data, ms };
+  } catch (e: any) {
+    const ms = Date.now() - started;
+    const msg = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fetch_error');
+    return { ok: false, error: msg, ms };
+  }
+}
+
+/**
+ * Call GPT Merge endpoint (uses GPT Direct with special prompt)
+ */
+async function callGPTMerge(
+  originalQuery: string,
+  kbAnswer: string,
+  gptAnswer: string,
+  timeoutMs: number
+): Promise<{ ok: true; data: GPTDirectResponse; ms: number } | { ok: false; error: string; ms: number }> {
+  const mergingPrompt = `You are an AI assistant that merges two responses about the same query into one coherent, comprehensive answer.
+
+**Original Query:** "${originalQuery}"
+
+**Response 1 (Knowledge Base - Factual):**
+${kbAnswer}
+
+**Response 2 (AI Assistant - Conversational):**
+${gptAnswer}
+
+**Your Task:**
+Merge these two responses intelligently into ONE comprehensive answer that:
+1. Combines ALL information from BOTH responses
+2. Removes repetition and redundancy
+3. Fixes any contradictions or errors
+4. Maintains a natural, conversational flow
+5. Preserves ALL unique facts, details, and insights from both
+6. Organizes information logically with proper structure
+
+**CRITICAL:** Do NOT omit any important information from either response. Your goal is to create a richer, more complete answer by combining both, not to summarize or reduce content.
+
+Provide the merged response in clean markdown format.`;
+
+  return callGPTDirect(mergingPrompt, GPT_MERGE_MAX_TOKENS, GPT_MERGE_TEMPERATURE, timeoutMs);
+}
+
+/**
+ * Main combined fetch logic
+ */
+async function fetchCombinedAnswer(
+  query: string,
+  timeoutMs: number
+): Promise<CombinedChatResponse> {
+  const startTime = Date.now();
+  let totalTokens = 0;
+
+  // Step 1: Parallel calls to KB and GPT Direct
+  const [kbResult, gptResult] = await Promise.all([
+    callKnowledgeBase(query, timeoutMs),
+    callGPTDirect(query, GPT_DEFAULT_MAX_TOKENS, GPT_DEFAULT_TEMPERATURE, timeoutMs)
+  ]);
+
+  // Track tokens
+  if (gptResult.ok) totalTokens += gptResult.data.tokensUsed;
+
+  // Step 2: Check if we have at least one success
+  if (!kbResult.ok && !gptResult.ok) {
+    logError({
+      branch: 'both_endpoints_failed',
+      kb_error: kbResult.error,
+      gpt_error: gptResult.error
+    });
+    throw new Error('Both endpoints failed');
+  }
+
+  // Step 3: Merge responses
+  let finalAnswer = '';
+  let mergeResult: { ok: boolean; data?: GPTDirectResponse; error?: string } | null = null;
+
+  if (kbResult.ok && gptResult.ok) {
+    // Both succeeded - merge them
+    logInfo({
+      branch: 'both_succeeded_merging',
+      kb_ms: kbResult.ms,
+      gpt_ms: gptResult.ms
+    });
+
+    mergeResult = await callGPTMerge(
+      query,
+      kbResult.data.answer,
+      gptResult.data.answer,
+      timeoutMs
+    );
+
+    if (mergeResult.ok) {
+      finalAnswer = mergeResult.data.answer;
+      totalTokens += mergeResult.data.tokensUsed;
+      logInfo({ branch: 'merge_successful', merge_ms: mergeResult.ms });
+    } else {
+      // Merge failed - fallback to concatenation
+      logError({ branch: 'merge_failed_fallback', error: mergeResult.error });
+      finalAnswer = `${gptResult.data.answer}\n\n---\n\n**Additional Context from Knowledge Base:**\n\n${kbResult.data.answer}`;
+    }
+  } else if (gptResult.ok) {
+    // Only GPT succeeded
+    finalAnswer = gptResult.data.answer;
+    logInfo({ branch: 'gpt_only', kb_error: kbResult.error });
+  } else if (kbResult.ok) {
+    // Only KB succeeded
+    finalAnswer = kbResult.data.answer;
+    logInfo({ branch: 'kb_only', gpt_error: gptResult.error });
+  }
+
+  const processingTimeMs = Date.now() - startTime;
+
+  // Build response
+  const response: CombinedChatResponse = {
+    answer: finalAnswer,
+    content: finalAnswer,
+    confidence: 0.8, // Default confidence
+    metadata: {
+      knowledgeBase: kbResult.ok ? {
+        success: true,
+        matches: kbResult.data.matches,
+        source: kbResult.data.source
+      } : {
+        success: false,
+        error: kbResult.error
+      },
+      gptDirect: gptResult.ok ? {
+        success: true,
+        model: gptResult.data.model,
+        tokensUsed: gptResult.data.tokensUsed,
+        isRestricted: gptResult.data.isRestricted
+      } : {
+        success: false,
+        error: gptResult.error
+      },
+      merge: mergeResult ? (mergeResult.ok ? {
+        success: true,
+        tokensUsed: mergeResult.data!.tokensUsed
+      } : {
+        success: false,
+        error: mergeResult.error
+      }) : undefined,
+      totalTokensUsed: totalTokens,
+      processingTimeMs
+    }
+  };
+
+  return response;
 }
 
 /* ============================== Handler ============================== */
@@ -266,148 +389,78 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!RAW_BASE) {
-      logError({ request_id, branch: 'config_error', base_url_set: false, msg: 'Missing PRIVATE_API_BASE_URL' });
-      // Friendly message (don’t 5xx user)
-      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+      logError({ request_id, branch: 'config_error', base_url_set: false });
+      return res.status(200).json({
+        answer: GENERIC_ERROR_MESSAGE,
+        content: GENERIC_ERROR_MESSAGE,
+        confidence: 0
+      });
     }
 
-    const { message, userId, topK, includeMetadata, conversationId } = (req.body || {}) as {
-      message?: string;
-      userId?: string;
-      topK?: number;
-      includeMetadata?: boolean;
-      conversationId?: string;
-    };
+    const { message } = (req.body || {}) as { message?: string };
 
     if (!message || !String(message).trim()) {
       logError({ request_id, branch: 'bad_request', msg: 'No message provided' });
-      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+      return res.status(200).json({
+        answer: GENERIC_ERROR_MESSAGE,
+        content: GENERIC_ERROR_MESSAGE,
+        confidence: 0
+      });
     }
 
-    // Circuit breaker short-circuit
+    // Circuit breaker check
     if (breakerOpen()) {
-      logInfo({ request_id, branch: 'cb_open_friendly', cb_until: cb.until });
-      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+      logInfo({ request_id, branch: 'cb_open', cb_until: cb.until });
+      return res.status(200).json({
+        answer: GENERIC_ERROR_MESSAGE,
+        content: GENERIC_ERROR_MESSAGE,
+        confidence: 0
+      });
     }
 
-    // Cache key (by message + resolved topK + user)
     const normalized = normalizeMessage(message);
-    const initialTopK = determineInitialTopK(normalized, typeof topK === 'number' ? topK : undefined);
-    const cacheKey = `${normalized}::${initialTopK}::${userId || 'anon'}`;
+    const cacheKey = `combined::${normalized}`;
+
+    // Check cache
     const cached = getCache(cacheKey);
     if (cached) {
-      const san = stripBlockedLinks(cached.answer || '');
-      logInfo({
-        request_id,
-        branch: 'cache_hit',
-        topK_initial: initialTopK,
-        confidence_final: cached.confidence,
-        blockedLinks: { count: san.blocked, domains: san.domains },
-      });
-      return res.status(200).json({ ...cached, answer: san.out, content: san.out });
+      logInfo({ request_id, branch: 'cache_hit' });
+      return res.status(200).json(cached);
     }
 
-    // First call
-    const reqBody1: QueryRequest = {
-      query: normalized,
-      topK: initialTopK,
-      includeMetadata: includeMetadata !== false, // default true
-      conversationId, // not used upstream; kept for symmetry
-      userId,
-    };
-    const first = await callUpstream(reqBody1, QUERY_TIMEOUT_MS);
-    if (!first.ok) {
-      breakerFail();
-      logError({
-        request_id,
-        branch: 'upstream_first_error',
-        error: first.error,
-        status: first.status ?? null,
-        timings: { first_ms: first.ms },
-      });
-      return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
-    }
+    // Fetch combined answer
+    const response = await fetchCombinedAnswer(normalized, QUERY_TIMEOUT_MS);
 
-    let chosen = first.data;
-    let topK_final = initialTopK;
-    const conf_initial = chosen.confidence ?? 0;
-
-    // Adaptive TopK (one bump) if low confidence and we didn't start high
-    if (conf_initial < 0.7 && initialTopK <= 8) {
-      const bumped = Math.min(12, initialTopK + 3);
-      const reqBody2: QueryRequest = {
-        query: normalized,
-        topK: bumped,
-        includeMetadata: includeMetadata !== false,
-        conversationId: chosen.conversationId || conversationId,
-        userId,
-      };
-      const second = await callUpstream(reqBody2, QUERY_TIMEOUT_MS);
-
-      if (second.ok && (second.data.confidence ?? 0) >= conf_initial) {
-        chosen = second.data;
-        topK_final = bumped;
-      }
-
-      logInfo({
-        request_id,
-        branch: 'adaptive_done',
-        topK_initial: initialTopK,
-        topK_final,
-        confidence_initial: conf_initial,
-        confidence_final: chosen.confidence ?? 0,
-        timings: { first_ms: first.ms, second_ms: second.ok ? second.ms : null },
-      });
-    } else {
-      logInfo({
-        request_id,
-        branch: 'single_shot',
-        topK_initial: initialTopK,
-        topK_final,
-        confidence_initial: conf_initial,
-        confidence_final: chosen.confidence ?? 0,
-        timings: { first_ms: first.ms },
-      });
-    }
-
-    // Upstream success → close CB
+    // Success - reset circuit breaker
     breakerOk();
 
-    // Blocklist sanitization
-    const san = stripBlockedLinks(chosen.answer || '');
-    const finalAnswer = san.out;
-
-    // Cache only if above confidence floor (NEVER cache friendly error text)
-    const okToCache = (chosen.confidence ?? 0) >= CONV_CONFIDENCE_MIN;
-    if (okToCache) {
-      setCache(cacheKey, { ...chosen, answer: finalAnswer });
-    }
+    // Cache the response
+    setCache(cacheKey, response);
 
     const total_ms = Date.now() - started_at;
     logInfo({
       request_id,
-      branch: okToCache ? 'success_cached' : 'success_uncached',
-      latency_ms_total: total_ms,
-      topK_final,
-      confidence_final: chosen.confidence ?? 0,
-      blockedLinks: { count: san.blocked, domains: san.domains },
-      message_len: normalized.length,
-      answer_len: finalAnswer.length,
-      base_url_set: true,
+      branch: 'success',
+      total_ms,
+      kb_success: response.metadata.knowledgeBase?.success,
+      gpt_success: response.metadata.gptDirect?.success,
+      merge_success: response.metadata.merge?.success,
+      total_tokens: response.metadata.totalTokensUsed
     });
 
-    // Return with back-compat { content }
-    return res.status(200).json({
-      answer: finalAnswer,
-      content: finalAnswer, // backward compatibility
-      confidence: chosen.confidence ?? 0,
-      conversationId: chosen.conversationId,
-      sources: (includeMetadata !== false) ? chosen.sources : undefined,
-      processingTimeMs: chosen.processingTimeMs,
-      queryType: chosen.queryType,
-    } as QueryResponse & { content: string });
+    return res.status(200).json(response);
+
   } catch (e: any) {
-    logError({ request_id, branch: 'unhandled_error', msg: e?.message || 'Unhandled error' });
-    return res.status(200).json({ answer: GENERIC_ERROR_MESSAGE, content: GENERIC_ERROR_MESSAGE, confidence: 0 });
+    breakerFail();
+    logError({
+      request_id,
+      branch: 'unhandled_error',
+      msg: e?.message || 'Unhandled error'
+    });
+    return res.status(200).json({
+      answer: GENERIC_ERROR_MESSAGE,
+      content: GENERIC_ERROR_MESSAGE,
+      confidence: 0
+    });
   }
 }

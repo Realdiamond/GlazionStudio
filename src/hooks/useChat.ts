@@ -8,7 +8,7 @@ import type { Message, ChatSession, AppError } from '@/types/chat';
  * 
  * Features:
  * - Message state management
- * - API communication
+ * - API communication with new combined endpoint
  * - Error handling
  * - Loading states
  * - Rate limiting
@@ -73,8 +73,6 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   // Refs for cleanup and persistence
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastMessageRef = useRef<{ content: string; image?: File } | null>(null);
-
-  
 
   // Toast for user notifications
   const { toast } = useToast();
@@ -198,6 +196,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
 
   /**
    * Main function to send user messages
+   * Now works with the new combined endpoint (KB + GPT Direct + Merge)
    */
   const sendUserMessage = useCallback(async (
     content: string,
@@ -238,16 +237,19 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
       const userMessage = createMessage('user', content.trim(), imageUrl);
       addMessage(userMessage);
 
-      // Send to API
+      // Send to API - now returns combined response from 3 endpoints
       const startTime = Date.now();
       const aiResponse = await sendMessage(content, image);
       const processingTime = Date.now() - startTime;
 
       // Add AI response to chat
+      // Note: sendMessage() already returns the merged answer string
+      // All metadata (KB matches, tokens, etc.) is logged server-side only
       const aiMessage = createMessage('ai', aiResponse);
       aiMessage.metadata = {
         processingTime,
-        model: 'openai/gpt-3.5-turbo', // This would come from API response
+        // We could add more metadata here if needed, but keeping it simple
+        // The complex metadata (KB matches, token usage) stays server-side
       };
       addMessage(aiMessage);
 
@@ -296,8 +298,6 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     setMessages([]);
     setError(null);
     lastMessageRef.current = null;
-    
-    // Remove the toast notification for clearing messages
   }, []);
 
   /**

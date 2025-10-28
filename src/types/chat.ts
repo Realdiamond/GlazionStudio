@@ -26,6 +26,35 @@ export interface MessageMetadata {
   model?: string; // AI model used for response
   processingTime?: number; // Time taken to generate response
   imageDescription?: string; // Description of uploaded image
+  
+  // NEW: Metadata from combined endpoint
+  knowledgeBase?: {
+    success: boolean;
+    matches?: KnowledgeBaseMatch[];
+    source?: string;
+    error?: string;
+  };
+  gptDirect?: {
+    success: boolean;
+    model?: string;
+    tokensUsed?: number;
+    isRestricted?: boolean;
+    error?: string;
+  };
+  merge?: {
+    success: boolean;
+    tokensUsed?: number;
+    error?: string;
+  };
+  totalTokensUsed?: number;
+}
+
+// NEW: Knowledge Base match structure
+export interface KnowledgeBaseMatch {
+  id: string;
+  score: number;
+  content: string;
+  metadata: Record<string, any>;
 }
 
 // Chat session management
@@ -61,6 +90,35 @@ export interface AIResponse {
   tokens: number; // Tokens consumed
   processingTime: number; // Response generation time
   error?: string; // Error message if any
+}
+
+// NEW: Combined chat response from backend
+export interface CombinedChatResponse {
+  answer: string;
+  content: string; // Backward compatibility
+  confidence: number;
+  metadata: {
+    knowledgeBase?: {
+      success: boolean;
+      matches?: KnowledgeBaseMatch[];
+      source?: string;
+      error?: string;
+    };
+    gptDirect?: {
+      success: boolean;
+      model?: string;
+      tokensUsed?: number;
+      isRestricted?: boolean;
+      error?: string;
+    };
+    merge?: {
+      success: boolean;
+      tokensUsed?: number;
+      error?: string;
+    };
+    totalTokensUsed: number;
+    processingTimeMs: number;
+  };
 }
 
 // File upload types for security and validation
@@ -215,9 +273,9 @@ export interface PerformanceMetrics {
 }
 
 // Export utility types for common patterns
-export type Partial<T> = { [P in keyof T]?: T[P] };
-export type Required<T> = { [P in keyof T]-?: T[P] };
-export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+export type PartialMessage = Partial<Message>;
+export type RequiredMessage = Required<Message>;
+export type OptionalMetadata<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 // Status enums for consistent state management
 export enum LoadingState {
@@ -238,4 +296,20 @@ export enum FileType {
   IMAGE = 'image',
   DOCUMENT = 'document',
   UNKNOWN = 'unknown'
+}
+
+// NEW: Endpoint status types
+export enum EndpointStatus {
+  SUCCESS = 'success',
+  FAILED = 'failed',
+  PENDING = 'pending',
+  TIMEOUT = 'timeout'
+}
+
+// NEW: Response source indicator
+export enum ResponseSource {
+  KNOWLEDGE_BASE = 'knowledge_base',
+  GPT_DIRECT = 'gpt_direct',
+  MERGED = 'merged',
+  FALLBACK = 'fallback'
 }

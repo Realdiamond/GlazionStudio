@@ -44,17 +44,59 @@ class RateLimiter {
 export const rateLimiter = new RateLimiter(20, 60000);
 
 /* =========================
+   Chat: Combined response types
+   ========================= */
+
+/**
+ * Response from the combined chat endpoint
+ * This includes data from all three API calls (KB, GPT Direct, GPT Merge)
+ */
+export interface CombinedChatResponse {
+  answer: string;
+  content: string; // Backward compatibility
+  confidence: number;
+  metadata: {
+    knowledgeBase?: {
+      success: boolean;
+      matches?: Array<{
+        id: string;
+        score: number;
+        content: string;
+        metadata: Record<string, any>;
+      }>;
+      source?: string;
+      error?: string;
+    };
+    gptDirect?: {
+      success: boolean;
+      model?: string;
+      tokensUsed?: number;
+      isRestricted?: boolean;
+      error?: string;
+    };
+    merge?: {
+      success: boolean;
+      tokensUsed?: number;
+      error?: string;
+    };
+    totalTokensUsed: number;
+    processingTimeMs: number;
+  };
+}
+
+/* =========================
    Chat: send a message
    ========================= */
 
 /**
  * Sends a chat message to the serverless API.
+ * Now returns the combined response from KB + GPT Direct + GPT Merge
  */
-export async function sendMessage(message: string): Promise<string> {
+export async function sendMessage(message: string, image?: File): Promise<string> {
   const sanitized = sanitizeInput(message || '');
   if (!sanitized) throw new Error('Message cannot be empty');
 
-  // optional local throttle
+  // Optional local throttle
   if (!rateLimiter.canMakeRequest()) {
     const wait = Math.ceil(rateLimiter.getTimeUntilReset() / 1000);
     throw new Error(`Please wait ${wait}s before trying again.`);
@@ -75,10 +117,47 @@ export async function sendMessage(message: string): Promise<string> {
     throw new Error(msg);
   }
 
-  const data = await res.json();
-  const out = (data?.content || '').trim();
+  const data: CombinedChatResponse = await res.json();
+  const out = (data?.answer || data?.content || '').trim();
   if (!out) throw new Error('No response from AI');
+  
   return out;
+}
+
+/**
+ * Get detailed response including metadata
+ * Useful if you want to display token usage, source matches, etc.
+ */
+export async function sendMessageDetailed(message: string, image?: File): Promise<CombinedChatResponse> {
+  const sanitized = sanitizeInput(message || '');
+  if (!sanitized) throw new Error('Message cannot be empty');
+
+  if (!rateLimiter.canMakeRequest()) {
+    const wait = Math.ceil(rateLimiter.getTimeUntilReset() / 1000);
+    throw new Error(`Please wait ${wait}s before trying again.`);
+  }
+
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: sanitized }),
+  });
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const e = await res.json();
+      if (e?.error) msg = typeof e.error === 'string' ? e.error : JSON.stringify(e.error);
+    } catch {}
+    throw new Error(msg);
+  }
+
+  const data: CombinedChatResponse = await res.json();
+  if (!data?.answer && !data?.content) {
+    throw new Error('No response from AI');
+  }
+  
+  return data;
 }
 
 /* =========================

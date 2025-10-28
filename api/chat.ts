@@ -173,7 +173,10 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 async function callKnowledgeBase(
   query: string,
   timeoutMs: number
-): Promise<{ ok: true; data: KnowledgeBaseResponse; ms: number } | { ok: false; error: string; ms: number }> {
+): Promise<
+  | { ok: true; data: KnowledgeBaseResponse; ms: number; error?: never }
+  | { ok: false; error: string; ms: number; data?: never }
+> {
   const started = Date.now();
   try {
     const url = `${RAW_BASE}/api/SpecializedQA/knowledge-base`;

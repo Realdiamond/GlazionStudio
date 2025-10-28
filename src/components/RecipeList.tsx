@@ -16,9 +16,17 @@ type Props = {
   onChange: (items: RecipeItem[]) => void;
   materials: Material[];
   isAdditive?: boolean;
+  afterTitle?: React.ReactNode;
 };
 
-export default function RecipeList({ title, items, onChange, materials, isAdditive = false }: Props) {
+export default function RecipeList({
+  title,
+  items,
+  onChange,
+  materials,
+  isAdditive = false,
+  afterTitle
+}: Props) {
   function update(idx: number, patch: Partial<RecipeItem>) {
     const next = items.map((it, i) => (i === idx ? { ...it, ...patch } : it));
     onChange(next);
@@ -34,9 +42,7 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
   }
 
   function shouldShowRemove(index: number): boolean {
-    if (!isAdditive && index === 0 && items.length === 1) {
-      return false;
-    }
+    if (!isAdditive && index === 0 && items.length === 1) return false;
     return true;
   }
 
@@ -45,21 +51,14 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
       update(idx, { amount: '' });
       return;
     }
-    
-    if (/^\d*\.?\d*$/.test(value)) {
-      update(idx, { amount: value });
-    }
+    if (/^\d*\.?\d*$/.test(value)) update(idx, { amount: value });
   }
 
   function handleAmountBlur(idx: number, currentValue: number | string | '') {
     if (currentValue === '' || currentValue === 0) return;
-    
     const str = String(currentValue);
     const num = parseFloat(str);
-    
-    if (!isNaN(num) && num !== currentValue) {
-      update(idx, { amount: num });
-    }
+    if (!isNaN(num) && num !== currentValue) update(idx, { amount: num });
   }
 
   return (
@@ -71,17 +70,17 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
         )}
       </div>
 
+      {afterTitle ? <div className="mb-1">{afterTitle}</div> : null}
+
       <div className="grid gap-2">
         {items.map((it, idx) => (
           <div key={idx} className="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
-            
             <MaterialAutocomplete
               materials={materials}
               value={it.material}
               onChange={(value) => update(idx, { material: value })}
               placeholder="Type to search materials..."
             />
-
             <input
               className="rounded-lg border bg-background p-2 w-28"
               placeholder="Amount"
@@ -94,7 +93,6 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
               step="0.01"
               required
             />
-
             {shouldShowRemove(idx) ? (
               <button
                 type="button"
@@ -111,7 +109,9 @@ export default function RecipeList({ title, items, onChange, materials, isAdditi
         ))}
 
         {items.length === 0 && !isAdditive && (
-          <p className="text-xs text-muted-foreground">No materials yet. Click "Add Base Material" below.</p>
+          <p className="text-xs text-muted-foreground">
+            No materials yet. Click "Add Base Material" below.
+          </p>
         )}
       </div>
 

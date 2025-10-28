@@ -709,12 +709,30 @@ export default function RecipesToImage() {
             </button>
           </div>
 
-          <RecipeList 
-            title="Metallic Oxides (Colorants)" 
-            items={additives} 
+          <RecipeList
+            title="Metallic Oxides (Colorants)"
+            items={additives}
             onChange={setAdditives}
             materials={materials}
             isAdditive={true}
+            afterTitle={
+              <div className="flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <span className="text-xs sm:text-sm font-medium text-gray-700">Oxides Total:</span>
+                  <span className="text-sm sm:text-lg font-semibold bg-blue-100 text-blue-800 px-2 sm:px-3 py-0.5 sm:py-1 rounded">
+                    {additivesTotal.toFixed(2)}%
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={retotalAdditives}
+                  disabled={additivesTotal <= 0}
+                  className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  Retotal to 100
+                </button>
+              </div>
+            }
           />
 
           {/* Additives Total and Retotal */}

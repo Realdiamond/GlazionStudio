@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, PanelLeft, PanelRight, MessageSquare, Image as ImgIcon, FlaskConical, Calculator } from 'lucide-react';
+import { Plus, PanelLeft, PanelRight, MessageSquare, Image as ImgIcon, FlaskConical, Calculator, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
@@ -111,6 +111,7 @@ const EnhancedSidebar: React.FC<EnhancedSidebarProps> = ({
     { name: 'Recipes → Image', path: '/recipes-to-image', icon: FlaskConical },
     { name: 'Image → Recipes', path: '/image-to-recipes', icon: ImgIcon },
     { name: 'UMF Calculator', path: '/umf-calculator', icon: Calculator },
+    { name: 'Share Glaze', path: '/share-glaze', icon: Upload },
   ];
 
   // Updated handleNewChat to trigger the modal properly

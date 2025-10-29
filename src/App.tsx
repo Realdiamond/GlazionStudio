@@ -23,6 +23,7 @@ import HybridLayout from './layouts/HybridLayout';
 import RecipesToImage from './pages/RecipesToImage';
 import ImageToRecipes from './pages/ImageToRecipes';
 import UMFCalculator from './pages/UMFCalculator';
+import ShareGlaze from './pages/ShareGlaze';
 
 // Configure React Query client
 const queryClient = new QueryClient({
@@ -140,6 +141,7 @@ const AppRoutes: React.FC = () => {
           <Route path="/recipes-to-image" element={<RecipesToImage />} />
           <Route path="/image-to-recipes" element={<ImageToRecipes />} />
           <Route path="/umf-calculator" element={<UMFCalculator />} />
+          <Route path="/share-glaze" element={<ShareGlaze />} />
         </Route>
       </Route>
       

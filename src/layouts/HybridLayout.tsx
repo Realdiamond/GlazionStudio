@@ -1,12 +1,13 @@
 import React from 'react';
 import { Outlet, useLocation, Link } from 'react-router-dom';
-import { MessageSquare, Image as ImgIcon, FlaskConical, Calculator } from 'lucide-react';
+import { MessageSquare, Image as ImgIcon, FlaskConical, Calculator, Upload } from 'lucide-react';
 
 const featureTabs = [
   { to: '/', label: 'Chat Assistant', icon: MessageSquare, short: 'Chat' },
   { to: '/recipes-to-image', label: 'Recipes → Image', icon: FlaskConical, short: 'R→I' },
   { to: '/image-to-recipes', label: 'Image → Recipes', icon: ImgIcon, short: 'I→R' },
   { to: '/umf-calculator', label: 'UMF Calculator', icon: Calculator, short: 'UMF' },
+  { to: '/share-glaze', label: 'Share Glaze', icon: Upload, short: 'Share' },
 ];
 
 /**
@@ -22,7 +23,7 @@ export default function HybridLayout() {
   const { pathname } = useLocation();
 
   // Only show feature tabs on feature pages
-  const isFeaturePage = ['/', '/recipes-to-image', '/image-to-recipes', '/umf-calculator'].includes(pathname);
+  const isFeaturePage = ['/', '/recipes-to-image', '/image-to-recipes', '/umf-calculator', '/share-glaze'].includes(pathname);
 
   return (
     <div className="relative">

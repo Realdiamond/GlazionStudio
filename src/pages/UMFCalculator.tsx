@@ -3,14 +3,14 @@ import RecipeList, { RecipeItem } from '../components/RecipeList';
 import { computeChemistry } from '../lib/chemistry';
 import type { Material, Recipe, CalcOptions, OxideSymbol, OxideVector } from '../lib/types';
 import materialsData from '../data/materials.json';
+import glazeLimitsData from '../data/glaze-limits.json';
 
 interface GlazeLimit {
-  id: number;
   cone: string;
   oxide: string;
-  minUmf: number | null;
-  maxUmf: number | null;
-  notes: string | null;
+  minUmf: number;
+  maxUmf: number;
+  notes: string;
 }
 
 const DEFAULT_FLUX_SET: OxideSymbol[] = [
@@ -121,13 +121,146 @@ function GroupedUMFTable({ umf }: { umf: OxideVector }) {
   );
 }
 
+// OptimizationSuggestions Component
+function OptimizationSuggestions({
+  umf,
+  limits,
+  cone,
+  materials,
+  recipeLines
+}: {
+  umf: OxideVector;
+  limits: GlazeLimit[];
+  cone: string;
+  materials: Material[];
+  recipeLines: Array<{ materialId: string; partsPct: number }>;
+}) {
+  const suggestions = useMemo(() => {
+    const result: {
+      oxide: string;
+      current: number;
+      target: string;
+      direction: "increase" | "decrease";
+      materials: { name: string; oxideContent: number; inRecipe: boolean }[];
+    }[] = [];
+
+    limits.forEach(limit => {
+      const oxide = limit.oxide;
+      const value = (umf as any)[oxide] || 0;
+      const min = limit.minUmf;
+      const max = limit.maxUmf;
+
+      let direction: "increase" | "decrease" | null = null;
+      let target = "";
+
+      if (min !== null && value < min) {
+        direction = "increase";
+        target = `${min.toFixed(2)} - ${max?.toFixed(2) ?? "∞"}`;
+      } else if (max !== null && value > max) {
+        direction = "decrease";
+        target = `${min?.toFixed(2) ?? "0"} - ${max.toFixed(2)}`;
+      }
+
+      if (direction) {
+        const relevantMaterials = materials
+          .filter(m => {
+            const content = m.oxideAnalysis[oxide] || 0;
+            return content > 5;
+          })
+          .map(m => ({
+            name: m.name,
+            oxideContent: m.oxideAnalysis[oxide] || 0,
+            inRecipe: recipeLines.some(l => l.materialId === m.id)
+          }))
+          .sort((a, b) => b.oxideContent - a.oxideContent)
+          .slice(0, 3);
+
+        if (relevantMaterials.length > 0) {
+          result.push({
+            oxide,
+            current: value,
+            target,
+            direction,
+            materials: relevantMaterials
+          });
+        }
+      }
+    });
+
+    return result;
+  }, [umf, limits, materials, recipeLines]);
+
+  if (suggestions.length === 0) {
+    return (
+      <div className="p-3 bg-green-50 border border-green-200 rounded-md">
+        <h4 className="text-sm font-semibold text-green-800 mb-1">Recipe Optimized</h4>
+        <p className="text-xs text-green-700">
+          All oxides are within target ranges for Cone {cone}.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+      <h4 className="text-sm font-semibold text-blue-800 mb-2">Optimization Suggestions</h4>
+      <div className="space-y-3">
+        {suggestions.map(({ oxide, current, target, direction, materials: suggestedMats }) => (
+          <div key={oxide} className="text-xs space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-gray-900">
+                {oxide}: {current.toFixed(3)} → {target}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded ${
+                direction === "increase" 
+                  ? "bg-green-100 text-green-700" 
+                  : "bg-red-100 text-red-700"
+              }`}>
+                {direction === "increase" ? "↑ Increase" : "↓ Decrease"}
+              </span>
+            </div>
+            <div className="pl-2 border-l-2 border-blue-300">
+              {direction === "increase" ? (
+                <p className="text-gray-600 mb-1">Add materials high in {oxide}:</p>
+              ) : (
+                <p className="text-gray-600 mb-1">Reduce materials high in {oxide}:</p>
+              )}
+              <div className="space-y-0.5">
+                {suggestedMats.map(mat => (
+                  <div key={mat.name} className="flex items-center justify-between text-gray-900">
+                    <span className="flex items-center gap-1">
+                      {mat.inRecipe && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="In recipe" />
+                      )}
+                      {mat.name}
+                    </span>
+                    <span className="font-mono">{mat.oxideContent.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-gray-500 mt-3 pt-2 border-t border-blue-200">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+          = Currently in recipe
+        </span>
+      </p>
+    </div>
+  );
+}
+
 // Main Component
 export default function UMFCalculator() {
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [glazeLimits, setGlazeLimits] = useState<GlazeLimit[]>([]);
   const [base, setBase] = useState<RecipeItem[]>([{ material: '', amount: '' }]);
   const [additives, setAdditives] = useState<RecipeItem[]>([]);
+  const [selectedCone, setSelectedCone] = useState('6');
 
-  // Load materials from JSON
+  // Load materials and glaze limits from JSON
   useEffect(() => {
     try {
       const normalized = (materialsData as any[]).map((m) => {
@@ -143,10 +276,18 @@ export default function UMFCalculator() {
         };
       }).filter(m => m.name);
       setMaterials(normalized);
+
+      // Load glaze limits
+      setGlazeLimits(glazeLimitsData as GlazeLimit[]);
     } catch (err) {
-      console.error('Failed to load materials:', err);
+      console.error('Failed to load data:', err);
     }
   }, []);
+
+  // Filter glaze limits by selected cone
+  const coneLimits = useMemo(() => {
+    return glazeLimits.filter(limit => limit.cone === selectedCone);
+  }, [glazeLimits, selectedCone]);
 
   // Calculate totals
   const baseTotal = useMemo(() => {
@@ -220,8 +361,8 @@ export default function UMFCalculator() {
   };
 
   // Calculate chemistry
-  const chem = useMemo(() => {
-    if (materials.length === 0) return null;
+  const { chem, recipeLines } = useMemo(() => {
+    if (materials.length === 0) return { chem: null, recipeLines: [] };
 
     try {
       const allLines = [...base, ...additives]
@@ -238,10 +379,10 @@ export default function UMFCalculator() {
         })
         .filter(Boolean) as Array<{ materialId: string; partsPct: number }>;
 
-      if (allLines.length === 0) return null;
+      if (allLines.length === 0) return { chem: null, recipeLines: [] };
 
       const total = allLines.reduce((sum, line) => sum + line.partsPct, 0);
-      if (total <= 0) return null;
+      if (total <= 0) return { chem: null, recipeLines: [] };
 
       allLines.forEach(line => {
         line.partsPct = (line.partsPct / total) * 100;
@@ -251,7 +392,7 @@ export default function UMFCalculator() {
         id: 'temp-recipe',
         name: 'User Recipe',
         category: 'glaze',
-        cone: '6',
+        cone: selectedCone,
         lines: allLines,
       };
 
@@ -260,12 +401,13 @@ export default function UMFCalculator() {
         unityMode: 'flux_to_1',
       };
 
-      return computeChemistry(recipe, materials, calcOpts);
+      const chemistry = computeChemistry(recipe, materials, calcOpts);
+      return { chem: chemistry, recipeLines: allLines };
     } catch (err) {
       console.error('Chemistry calculation error:', err);
-      return null;
+      return { chem: null, recipeLines: [] };
     }
-  }, [base, additives, materials]);
+  }, [base, additives, materials, selectedCone]);
 
   return (
     <div className="container mx-auto max-w-7xl p-4 sm:p-6">
@@ -278,6 +420,23 @@ export default function UMFCalculator() {
               Build your recipe and see real-time Unity Molecular Formula analysis
             </p>
           </header>
+
+          {/* Cone Selector */}
+          <div className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Firing Cone
+            </label>
+            <select
+              value={selectedCone}
+              onChange={(e) => setSelectedCone(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="06">Cone 06</option>
+              <option value="6">Cone 6</option>
+              <option value="9">Cone 9</option>
+              <option value="10">Cone 10</option>
+            </select>
+          </div>
 
           <RecipeList 
             title="Base Glaze" 
@@ -356,6 +515,14 @@ export default function UMFCalculator() {
               Retotal All to 100
             </button>
           </div>
+
+          {/* Mole % Card - Moved to left side */}
+          {chem && (
+            <div className="rounded-xl border p-4 sm:p-6 bg-white shadow-sm">
+              <h3 className="font-semibold mb-3 text-base sm:text-lg">Mole %</h3>
+              <ChemTable obj={chem.molePct} fmt={(v) => v.toFixed(2)} />
+            </div>
+          )}
         </div>
 
         {/* RIGHT PANEL - UMF Results */}
@@ -369,6 +536,7 @@ export default function UMFCalculator() {
                 <p className="text-gray-500 text-sm">Add materials to see chemistry analysis</p>
               ) : (
                 <div className="space-y-4 sm:space-y-6">
+                  {/* Warnings */}
                   {chem.warnings.length > 0 && (
                     <div className="space-y-1">
                       {chem.warnings.map((w, i) => (
@@ -428,17 +596,20 @@ export default function UMFCalculator() {
                       </p>
                     </div>
                   </div>
+
+                  {/* Optimization Suggestions */}
+                  {coneLimits.length > 0 && (
+                    <OptimizationSuggestions
+                      umf={chem.umf}
+                      limits={coneLimits}
+                      cone={selectedCone}
+                      materials={materials}
+                      recipeLines={recipeLines}
+                    />
+                  )}
                 </div>
               )}
             </div>
-
-            {/* Mole % Card */}
-            {chem && (
-              <div className="rounded-xl border p-4 sm:p-6 bg-white shadow-sm">
-                <h3 className="font-semibold mb-3 text-base sm:text-lg">Mole %</h3>
-                <ChemTable obj={chem.molePct} fmt={(v) => v.toFixed(2)} />
-              </div>
-            )}
           </div>
         </aside>
       </div>

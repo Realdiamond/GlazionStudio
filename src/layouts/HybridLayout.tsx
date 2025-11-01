@@ -38,9 +38,10 @@ export default function HybridLayout() {
             height: '52px'
           }}
         >
-          <div className="h-full flex items-center justify-center px-4">
-            <nav className="w-full max-w-4xl mx-auto">
-              <ul className="flex h-full items-center justify-center gap-2">
+          {/* Scrollable container with hidden scrollbar */}
+          <div className="h-full overflow-x-auto overflow-y-hidden scrollbar-hide">
+            <nav className="h-full px-4">
+              <ul className="flex h-full items-center justify-center md:justify-center gap-2 min-w-max">
                 {featureTabs.map(({ to, label, icon: Icon, short }) => {
                   const active = pathname === to;
                   return (
@@ -48,14 +49,14 @@ export default function HybridLayout() {
                       <Link
                         to={to}
                         className={[
-                          'flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-200 text-sm font-medium',
+                          'flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-200 text-sm font-medium whitespace-nowrap',
                           active 
                             ? 'text-primary bg-primary/10 border border-primary/20 shadow-sm' 
                             : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
                         ].join(' ')}
                         aria-current={active ? 'page' : undefined}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-4 w-4 flex-shrink-0" />
                         {/* Full label on desktop, short on mobile */}
                         <span className="hidden sm:inline">{label}</span>
                         <span className="sm:hidden">{short}</span>
@@ -73,6 +74,18 @@ export default function HybridLayout() {
       <div style={{ paddingTop: isFeaturePage ? '52px' : '0px' }}>
         <Outlet />
       </div>
+
+      {/* CSS for hiding scrollbar but keeping functionality */}
+      <style>{`
+        .scrollbar-hide {
+          -ms-overflow-style: none;  /* IE and Edge */
+          scrollbar-width: none;  /* Firefox */
+        }
+        
+        .scrollbar-hide::-webkit-scrollbar {
+          display: none;  /* Chrome, Safari and Opera */
+        }
+      `}</style>
     </div>
   );
 }

@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // 👇 ADD THIS: Track the login
         try {
-          await fetch(`${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ''}/api/track-login`, {
+          await fetch(`${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://glazion-studio.vercel.app'}/api/track-login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

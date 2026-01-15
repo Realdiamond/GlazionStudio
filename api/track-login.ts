@@ -1,14 +1,24 @@
 import { sql } from '@vercel/postgres';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
-  
-  const { username, userAgent, ip } = req.body;
-  
-  await sql`
-    INSERT INTO login_events (username, user_agent, ip_address, logged_in_at)
-    VALUES (${username}, ${userAgent}, ${ip}, NOW())
-  `;
-  
-  res.status(200).json({ success: true });
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+    const { username, userAgent, ip } = req.body;
+
+    await sql`
+      INSERT INTO login_events (username, user_agent, ip_address, logged_in_at)
+      VALUES (${username}, ${userAgent}, ${ip}, NOW())
+    `;
+
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Failed to log login' });
+  }
 }

@@ -1,4 +1,3 @@
-// api/auth.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import jwt from 'jsonwebtoken';
 import { sql } from '@vercel/postgres';
@@ -35,15 +34,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           { expiresIn: '1h' }
         );
 
-        // Direct database insert - more reliable than HTTP self-call
+        // Track the login with location
         try {
+          const userAgent = req.headers['user-agent'] || 'Unknown';
+          const ipAddress = req.headers['x-forwarded-for']?.toString().split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+          
+          // Fetch location from IP
+          let city = null, country = null, region = null;
+          try {
+            const geoRes = await fetch(`http://ip-api.com/json/${ipAddress}?fields=city,country,regionName`);
+            const geo = await geoRes.json();
+            if (geo.city) city = geo.city;
+            if (geo.country) country = geo.country;
+            if (geo.regionName) region = geo.regionName;
+          } catch (geoErr) {
+            console.error('Geolocation failed:', geoErr);
+          }
+
           await sql`
-            INSERT INTO login_events (username, user_agent, ip_address)
-            VALUES (
-              ${email.toLowerCase().trim()},
-              ${req.headers['user-agent'] || 'Unknown'},
-              ${req.headers['x-forwarded-for']?.toString().split(',')[0] || 'Unknown'}
-            )
+            INSERT INTO login_events (username, user_agent, ip_address, city, country, region)
+            VALUES (${email.toLowerCase().trim()}, ${userAgent}, ${ipAddress}, ${city}, ${country}, ${region})
           `;
         } catch (e) {
           console.error('Tracking failed:', e);

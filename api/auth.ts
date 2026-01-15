@@ -2,43 +2,52 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import jwt from 'jsonwebtoken';
 
-// Credentials stored ONLY on server - never sent to browser
 const VALID_CREDENTIALS = [
   { email: "francisgbohunmi@gmail.com", password: "4613732518" },
   { email: "realdiamonddigital@gmail.com", password: "Password1234" },
   { email: "tolludare@yahoo.com", password: "tolludare2." },
-  { email: "email@gmail.com", password: "email" }
+  { email: "js@gmail.com", password: "Resetpjs" }
 ];
 
 const JWT_SECRET = process.env.JWT_SECRET || 'glazion-demo-secret-2024';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Enable CORS for your frontend
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (req.method === 'POST') {
     const { action, email, password, token } = req.body;
 
     if (action === 'login') {
-      // Validate credentials (server-side only)
       const isValid = VALID_CREDENTIALS.some(
         cred => cred.email.toLowerCase() === email?.toLowerCase()?.trim() && 
                 cred.password === password
       );
 
       if (isValid) {
-        // Create JWT token (expires in 1 hour)
         const authToken = jwt.sign(
           { email: email.toLowerCase().trim(), timestamp: Date.now() },
           JWT_SECRET,
           { expiresIn: '1h' }
         );
+
+        // 👇 ADD THIS: Track the login
+        try {
+          await fetch(`${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ''}/api/track-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: email.toLowerCase().trim(),
+              userAgent: req.headers['user-agent'] || 'Unknown',
+              ip: req.headers['x-forwarded-for']?.toString().split(',')[0] || req.socket?.remoteAddress || 'Unknown'
+            })
+          });
+        } catch (e) {
+          console.error('Tracking failed:', e);
+        }
 
         return res.status(200).json({
           success: true,

@@ -1,6 +1,7 @@
 // api/auth.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import jwt from 'jsonwebtoken';
+import { sql } from '@vercel/postgres';
 
 const VALID_CREDENTIALS = [
   { email: "francisgbohunmi@gmail.com", password: "4613732518" },
@@ -34,17 +35,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           { expiresIn: '1h' }
         );
 
-        // 👇 ADD THIS: Track the login
+        // Direct database insert - more reliable than HTTP self-call
         try {
-          await fetch(`${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://glazion-studio.vercel.app'}/api/track-login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username: email.toLowerCase().trim(),
-              userAgent: req.headers['user-agent'] || 'Unknown',
-              ip: req.headers['x-forwarded-for']?.toString().split(',')[0] || req.socket?.remoteAddress || 'Unknown'
-            })
-          });
+          await sql`
+            INSERT INTO login_events (username, user_agent, ip_address)
+            VALUES (
+              ${email.toLowerCase().trim()},
+              ${req.headers['user-agent'] || 'Unknown'},
+              ${req.headers['x-forwarded-for']?.toString().split(',')[0] || 'Unknown'}
+            )
+          `;
         } catch (e) {
           console.error('Tracking failed:', e);
         }

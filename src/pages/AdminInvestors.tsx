@@ -198,7 +198,7 @@ const AdminInvestors = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Investor Activity Dashboard</h1>
+            <h1 className="text-3xl font-bold text-foreground">Admin Activity Dashboard</h1>
             <p className="text-muted-foreground">
               Logged in as <span className="font-medium">{adminUser.email}</span>
             </p>

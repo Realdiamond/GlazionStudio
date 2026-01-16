@@ -86,7 +86,7 @@ const AdminLogin = () => {
             
             {step === "email" ? (
               <p className="text-slate-400 leading-relaxed">
-                Enter your credentials to access the investor dashboard
+                Enter your credentials to access the administrator dashboard
               </p>
             ) : (
               <p className="text-slate-400">

@@ -24,6 +24,8 @@ import RecipesToImage from './pages/RecipesToImage';
 import ImageToRecipes from './pages/ImageToRecipes';
 import UMFCalculator from './pages/UMFCalculator';
 import ShareGlaze from './pages/ShareGlaze';
+import AdminLogin from "./pages/AdminLogin";
+import AdminInvestors from "./pages/AdminInvestors";
 
 // Configure React Query client
 const queryClient = new QueryClient({
@@ -121,15 +123,25 @@ const AppRoutes: React.FC = () => {
 
   return (
     <Routes>
-      {/* Public Routes - Login/Logout */}
-      <Route 
-        path="/login" 
-        element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} 
+      {/* ===================== */}
+      {/* ADMIN ROUTES (PUBLIC) */}
+      {/* ===================== */}
+      <Route path="/admin/login" element={<AdminLogin />} />
+      <Route path="/admin/investors" element={<AdminInvestors />} />
+
+      {/* ===================== */}
+      {/* PUBLIC AUTH ROUTES */}
+      {/* ===================== */}
+      <Route
+        path="/login"
+        element={isAuthenticated ? <Navigate to="/" replace /> : <Login />}
       />
       <Route path="/logout" element={<Logout />} />
-      
-      {/* Protected Routes - All main app pages */}
-      <Route 
+
+      {/* ===================== */}
+      {/* PROTECTED APP ROUTES */}
+      {/* ===================== */}
+      <Route
         element={
           <ProtectedRoute>
             <AppShell />
@@ -144,13 +156,13 @@ const AppRoutes: React.FC = () => {
           <Route path="/share-glaze" element={<ShareGlaze />} />
         </Route>
       </Route>
-      
-      {/* Catch-all - Redirect to login if not authenticated, otherwise 404 */}
-      <Route 
-        path="*" 
-        element={
-          isAuthenticated ? <NotFound /> : <Navigate to="/login" replace />
-        } 
+
+      {/* ===================== */}
+      {/* FALLBACK */}
+      {/* ===================== */}
+      <Route
+        path="*"
+        element={isAuthenticated ? <NotFound /> : <Navigate to="/login" replace />}
       />
     </Routes>
   );
